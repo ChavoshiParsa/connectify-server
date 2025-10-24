@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum AvatarColor {
+  RED
+  GREEN
+  BLUE
+  YELLOW
+  PURPLE
+  // more colors
+}
+
+enum UserStatus {
+  ONLINE
+  OFFLINE
+}
+
+enum GroupRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  SEEN
+}
+
+enum RoomType {
+  DM
+  GROUP
+}
+
+model User {
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  email     String  @unique
+  username  String  @unique
+  firstName String?
+  lastName  String?
+  biography String?
+  avatarUrl String?
+  avatarColor AvatarColor?
+
+  lastLoginAt  DateTime?
+  lastActiveAt DateTime?
+  status       UserStatus @default(OFFLINE)
+
+  passwordHash String
+  roles        String[]  @default([]) // e.g. ["user"], ["admin"]
+  sessions     Session[]
+
+  messages    Message[]
+  roomMembers RoomMember[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Room {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  type      RoomType @default(DM)
+  name      String? // used only for groups
+  avatarUrl String? // used only for groups
+
+  dmKey String? @unique // used only for direct messages :"minId-maxId"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages Message[]
+  members  RoomMember[]
+
+  @@index([type])
+}
+
+model RoomMember {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  roomId String @db.ObjectId
+  userId String @db.ObjectId
+
+  room Room @relation(fields: [roomId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  role     GroupRole? @default(MEMBER) // used only for groups
+  joinedAt DateTime   @default(now())
+
+  @@unique([roomId, userId])
+  @@index([roomId])
+  @@index([userId])
+}
+
+model Message {
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  roomId   String @db.ObjectId
+  room     Room   @relation(fields: [roomId], references: [id])
+  senderId String @db.ObjectId
+  sender   User   @relation(fields: [senderId], references: [id])
+
+  status      MessageStatus @default(SENT)
+  content     String
+  attachments Json? // consider a dedicated Attachment model later
+
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  @@index([roomId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model Session {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
+
+  hashedRt  String?
+  userAgent String?
+  ip        String?
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+// model MessageReceipt {
+//   id          String    @id @default(auto()) @map("_id") @db.ObjectId
+//   messageId   String    @db.ObjectId
+//   userId      String    @db.ObjectId
+//   deliveredAt DateTime?
+//   readAt      DateTime?
+
+//   @@unique([messageId, userId])
+//   @@index([userId])
+// }
