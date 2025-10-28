@@ -1,11 +1,11 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { UsersService } from '../users/users.service';
-import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
+import { AvatarColor } from 'generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
+import { UsersService } from '../users/users.service';
 import { LoginDto, RegisterDto } from './dto';
-import { Session } from 'generated/prisma/client';
 
 @Injectable()
 export class AuthService {
@@ -16,111 +16,148 @@ export class AuthService {
     private prisma: PrismaService,
   ) {}
 
-  async register(dto: RegisterDto) {
-    const existingUser = await this.usersService.findByEmail(dto.email);
-    if (existingUser) {
+  async register(dto: RegisterDto, userAgent: string, ip: string) {
+    const existingEmail = await this.usersService.findByEmail(dto.email.trim().toLowerCase());
+    if (existingEmail) {
       throw new BadRequestException('Email already in use');
     }
 
     const passwordHash = await argon2.hash(dto.password);
-
     const user = await this.usersService.createUser({
-      email: dto.email,
-      username: dto.username,
+      firstName: dto.firstName,
+      email: dto.email.trim().toLowerCase(),
       passwordHash,
+      avatarColor: this.getRandomAvatarColor(),
     });
 
-    return this.generateTokens(user.id, user.email);
+    const deviceId = dto?.deviceId || crypto.randomUUID();
+    const tokens = await this.generateTokens(user.id, user.email, deviceId);
+    await this.createSession(user.id, tokens.refreshToken, deviceId, userAgent, ip);
+    return { ...tokens, deviceId, user };
   }
 
   async login(dto: LoginDto, userAgent: string, ip: string) {
     const user = await this.usersService.findByEmail(dto.email);
+
     if (!user || !(await argon2.verify(user.passwordHash, dto.password))) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    const existingSession = dto?.deviceId
+      ? await this.prisma.session.findFirst({
+          where: {
+            userId: user.id,
+            deviceId: dto?.deviceId,
+          },
+        })
+      : null;
+
+    const deviceId = dto.deviceId ?? crypto.randomUUID();
+
+    const tokens = await this.generateTokens(user.id, user.email, deviceId);
+
+    const expired = existingSession && existingSession.expiresAt < new Date();
+    const session =
+      !existingSession || expired
+        ? await this.createSession(user.id, tokens.refreshToken, deviceId, userAgent, ip)
+        : await this.updateSession(existingSession.id, tokens.refreshToken, deviceId, userAgent, ip);
+
     await this.usersService.updateLastLogin(user.id);
 
-    const tokens = await this.generateTokens(user.id, user.email);
-    await this.createSession(user.id, tokens.refreshToken, userAgent, ip);
-
-    return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, user };
+    return {
+      ...tokens,
+      user,
+      deviceId,
+      sessionId: session.id,
+      isNewDevice: !existingSession,
+    };
   }
 
-  async refreshTokens(userId: string, refreshToken: string) {
+  async refreshTokens(userId: string, refreshToken: string, deviceId: string) {
     const user = await this.usersService.findById(userId);
     if (!user) throw new UnauthorizedException();
 
-    const sessions = await this.prisma.session.findMany({
-      where: { userId, expiresAt: { gt: new Date() } },
-    });
+    const session = await this.prisma.session.findFirst({ where: { userId, deviceId } });
+    if (!session) throw new UnauthorizedException('Invalid session');
 
-    let matchingSession: Session | undefined;
-    for (const session of sessions) {
-      if (session.hashedRt && (await argon2.verify(session.hashedRt, refreshToken))) {
-        matchingSession = session;
-        break;
-      }
+    const valid = await argon2.verify(session.hashedRt, refreshToken);
+    if (!valid) {
+      await this.prisma.session.deleteMany({ where: { userId, deviceId } });
+      throw new UnauthorizedException('Refresh token reuse detected');
     }
 
-    if (!matchingSession) throw new UnauthorizedException('Invalid refresh token');
-
-    // Rotate refresh token
-    const newTokens = await this.generateTokens(userId, user.email);
-    await this.prisma.session.update({
-      where: { id: matchingSession.id },
-      data: { hashedRt: await argon2.hash(newTokens.refreshToken) },
-    });
-
-    return newTokens;
+    const tokens = await this.generateTokens(userId, user.email, deviceId);
+    await this.updateSession(session.id, tokens.refreshToken, deviceId, session.userAgent, session.ip);
+    return tokens;
   }
 
-  async logout(userId: string, refreshToken: string) {
-    const sessions = await this.prisma.session.findMany({ where: { userId } });
-
-    let matchingSession: Session | undefined;
-    for (const session of sessions) {
-      if (session.hashedRt && (await argon2.verify(session.hashedRt, refreshToken))) {
-        matchingSession = session;
-        break;
-      }
-    }
+  async logout(userId: string, deviceId: string) {
+    const matchingSession = await this.prisma.session.findFirst({
+      where: { userId, deviceId },
+    });
 
     if (matchingSession) {
-      await this.prisma.session.update({
+      await this.prisma.session.delete({
         where: { id: matchingSession.id },
-        data: { hashedRt: null }, // Or delete the session
       });
     }
   }
 
-  private async generateTokens(userId: string, email: string) {
+  private async generateTokens(userId: string, email: string, deviceId: string) {
+    const accessOptions: JwtSignOptions = {
+      secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+      expiresIn: this.configService.get<string>('JWT_ACCESS_TTL') as JwtSignOptions['expiresIn'],
+    };
+    const refreshOptions: JwtSignOptions = {
+      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      expiresIn: this.configService.get<string>('JWT_REFRESH_TTL') as JwtSignOptions['expiresIn'],
+    };
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync({ sub: userId, email }),
-      this.jwtService.signAsync(
-        { sub: userId, email },
-        {
-          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
-          expiresIn: this.configService.get<string>('JWT_REFRESH_TTL') as JwtSignOptions['expiresIn'],
-        },
-      ),
+      this.jwtService.signAsync({ sub: userId, email, deviceId }, accessOptions),
+      this.jwtService.signAsync({ sub: userId, email, deviceId }, refreshOptions),
     ]);
-
     return { accessToken, refreshToken };
   }
 
-  private async createSession(userId: string, refreshToken: string, userAgent: string, ip: string) {
+  private async createSession(userId: string, refreshToken: string, deviceId: string, userAgent: string, ip: string) {
     const hashedRt = await argon2.hash(refreshToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-
-    await this.prisma.session.create({
+    return await this.prisma.session.create({
       data: {
         userId,
         hashedRt,
+        deviceId,
         userAgent,
         ip,
         expiresAt,
       },
     });
+  }
+
+  private async updateSession(
+    sessionId: string,
+    refreshToken: string,
+    deviceId: string,
+    userAgent: string,
+    ip: string,
+  ) {
+    const hashedRt = await argon2.hash(refreshToken);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    return await this.prisma.session.update({
+      where: { id: sessionId },
+      data: {
+        hashedRt,
+        deviceId,
+        userAgent,
+        ip,
+        expiresAt,
+      },
+    });
+  }
+
+  private getRandomAvatarColor(): AvatarColor {
+    const colors = Object.values(AvatarColor);
+    const randomIndex = Math.floor(Math.random() * colors.length);
+    return colors[randomIndex];
   }
 }

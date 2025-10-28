@@ -10,11 +10,22 @@ datasource db {
 
 enum AvatarColor {
   RED
-  GREEN
-  BLUE
+  ORANGE
+  AMBER
   YELLOW
+  LIME
+  GREEN
+  EMERALD
+  TEAL
+  CYAN
+  SKY
+  BLUE
+  INDIGO
+  VIOLET
   PURPLE
-  // more colors
+  FUCHSIA
+  PINK
+  ROSE
 }
 
 enum UserStatus {
@@ -40,18 +51,19 @@ enum RoomType {
 }
 
 model User {
-  id        String  @id @default(auto()) @map("_id") @db.ObjectId
-  email     String  @unique
-  username  String  @unique
-  firstName String?
-  lastName  String?
-  biography String?
-  avatarUrl String?
-  avatarColor AvatarColor?
+  id          String      @id @default(auto()) @map("_id") @db.ObjectId
+  publicId    String      @unique @default(nanoid())
+  email       String      @unique
+  username    String?     @unique
+  firstName   String
+  lastName    String?
+  biography   String?
+  avatarUrl   String?
+  avatarColor AvatarColor
 
-  lastLoginAt  DateTime?
-  lastActiveAt DateTime?
-  status       UserStatus @default(OFFLINE)
+  lastLoginAt  DateTime?  @default(now())
+  lastActiveAt DateTime?  @default(now())
+  status       UserStatus @default(ONLINE)
 
   passwordHash String
   roles        String[]  @default([]) // e.g. ["user"], ["admin"]
@@ -70,7 +82,7 @@ model Room {
   name      String? // used only for groups
   avatarUrl String? // used only for groups
 
-  dmKey String? @unique // used only for direct messages :"minId-maxId"
+  dmKey String? @unique // used only for direct messages :"minPublicId~maxPublicId"
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -121,15 +133,17 @@ model Session {
   userId String @db.ObjectId
   user   User   @relation(fields: [userId], references: [id])
 
-  hashedRt  String?
-  userAgent String?
-  ip        String?
+  hashedRt  String
+  deviceId  String
+  userAgent String
+  ip        String
 
   createdAt DateTime @default(now())
-  expiresAt DateTime
+  expiresAt DateTime // for TTL index
 
   @@index([userId, createdAt])
   @@index([expiresAt])
+  @@index([userId, hashedRt])
 }
 
 // model MessageReceipt {
