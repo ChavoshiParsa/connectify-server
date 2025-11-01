@@ -1,13 +1,43 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { PrismaClient } from 'generated/prisma/client';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Prisma, PrismaClient } from 'generated/prisma/client';
+import { appLogger } from '../logger/winston.logger';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(PrismaService.name);
+  constructor() {
+    super({
+      log: [
+        { emit: 'event', level: 'query' },
+        { emit: 'event', level: 'info' },
+        { emit: 'event', level: 'warn' },
+        { emit: 'event', level: 'error' },
+      ],
+    });
+  }
 
   async onModuleInit() {
     await this.$connect();
-    this.logger.log('✅ Successfully connected to the database');
+    appLogger.info('Connected to database', { context: 'PrismaService' });
+
+    this.$on('query' as never, (e: Prisma.QueryEvent) => {
+      appLogger.debug(e.query, {
+        context: 'PrismaQuery',
+        params: e.params,
+        durationMs: e.duration,
+      });
+    });
+
+    this.$on('info' as never, (e: Prisma.LogEvent) => {
+      appLogger.info(e.message, { context: 'Prisma' });
+    });
+
+    this.$on('warn' as never, (e: Prisma.LogEvent) => {
+      appLogger.warn(e.message, { context: 'Prisma' });
+    });
+
+    this.$on('error' as never, (e: Prisma.LogEvent) => {
+      appLogger.error(`Prisma error: ${e.message}`, { context: 'Prisma' });
+    });
 
     try {
       await this.$runCommandRaw({
@@ -20,9 +50,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           },
         ],
       });
-      this.logger.log('✅ TTL index ensured on Session.expiresAt');
+      appLogger.info('TTL index ensured on Session.expiresAt', { context: 'PrismaService' });
     } catch (err) {
-      // Narrow the type safely
       if (err && typeof err === 'object') {
         const code = (err as { code?: string }).code;
         const metaMessage = (err as { meta?: { message?: string } }).meta?.message;
@@ -33,18 +62,16 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           metaMessage?.includes('IndexOptionsConflict') || message?.includes('IndexOptionsConflict');
 
         if (isPrismaP2010 && isIndexConflict) {
-          // this.logger.warn('⚠️ TTL index already exists, skipping');
           return;
         }
       }
 
-      this.logger.error('❌ Error while creating index', err);
       throw err;
     }
   }
 
   async onModuleDestroy() {
     await this.$disconnect();
-    this.logger.log('🔌 Disconnected from the database');
+    appLogger.info('Disconnected from database', { context: 'PrismaService' });
   }
 }

@@ -1,11 +1,16 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
-import * as cookieParser from 'cookie-parser';
-import { ConfigService } from '@nestjs/config';
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { NestFactory } from '@nestjs/core';
+import * as cookieParser from 'cookie-parser';
+import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { NestWinstonLogger } from './logger/nest-winston.service';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const logger = app.get(NestWinstonLogger);
+  app.useLogger(logger);
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -29,8 +34,12 @@ async function bootstrap() {
     credentials: true,
   });
 
+  app.useGlobalFilters(new AllExceptionsFilter());
+
   const port = configService.get<number>('PORT') || 3001;
   await app.listen(port);
+
+  logger.log(`🚀 Server is live and listening on port ${port} (${process.env.NODE_ENV ?? 'development'})`, 'Bootstrap');
 }
 
 bootstrap().catch((error) => {
