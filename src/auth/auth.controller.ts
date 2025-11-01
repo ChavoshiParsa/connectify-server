@@ -1,13 +1,29 @@
-import { Body, Controller, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  HttpCode,
+  Post,
+  Req,
+  Res,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto';
+import { LoginDto, RegisterDto, ValidateDto } from './dto';
 import { JwtGuard } from './guards/jwt.guard';
 import { RefreshGuard } from './guards/refresh.guard';
 
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
+
+  @Post('validate')
+  @HttpCode(200)
+  async validate(@Body() dto: ValidateDto) {
+    return this.authService.validateEmailPass(dto);
+  }
 
   @Post('register')
   async register(@Body() dto: RegisterDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
@@ -48,9 +64,7 @@ export class AuthController {
     const refreshToken = req.user?.refreshToken;
     const deviceId = req.user?.deviceId;
 
-    if (!userId || !refreshToken || !deviceId) {
-      throw new UnauthorizedException('Invalid refresh payload');
-    }
+    if (!userId || !refreshToken || !deviceId) throw new UnauthorizedException('Invalid refresh payload');
 
     const { accessToken, refreshToken: newRefreshToken } = await this.authService.refreshTokens(
       userId,
@@ -67,9 +81,7 @@ export class AuthController {
     const userId = req.user?.userId;
     const deviceId = req.user?.deviceId;
 
-    if (!userId || !deviceId) {
-      throw new UnauthorizedException('Invalid logout payload');
-    }
+    if (!userId || !deviceId) throw new ForbiddenException('Access denied');
 
     await this.authService.logout(userId, deviceId);
     res.clearCookie('refreshToken');

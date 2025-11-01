@@ -1,10 +1,13 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from 'generated/prisma/client';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(PrismaService.name);
+
   async onModuleInit() {
     await this.$connect();
+    this.logger.log('✅ Successfully connected to the database');
 
     try {
       await this.$runCommandRaw({
@@ -17,6 +20,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           },
         ],
       });
+      this.logger.log('✅ TTL index ensured on Session.expiresAt');
     } catch (err) {
       // Narrow the type safely
       if (err && typeof err === 'object') {
@@ -29,17 +33,18 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           metaMessage?.includes('IndexOptionsConflict') || message?.includes('IndexOptionsConflict');
 
         if (isPrismaP2010 && isIndexConflict) {
-          // Ignore index conflict — index already exists
+          // this.logger.warn('⚠️ TTL index already exists, skipping');
           return;
         }
       }
 
-      // Re-throw any other errors
+      this.logger.error('❌ Error while creating index', err);
       throw err;
     }
   }
 
   async onModuleDestroy() {
     await this.$disconnect();
+    this.logger.log('🔌 Disconnected from the database');
   }
 }

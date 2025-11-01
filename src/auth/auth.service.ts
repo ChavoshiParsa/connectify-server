@@ -5,7 +5,8 @@ import * as argon2 from 'argon2';
 import { AvatarColor } from 'generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
-import { LoginDto, RegisterDto } from './dto';
+import { LoginDto, RegisterDto, ValidateDto } from './dto';
+import { ValidateResponse } from './types/validate-response';
 
 @Injectable()
 export class AuthService {
@@ -15,6 +16,31 @@ export class AuthService {
     private configService: ConfigService,
     private prisma: PrismaService,
   ) {}
+
+  async validateEmailPass(dto: ValidateDto): Promise<ValidateResponse> {
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.usersService.findByEmail(email);
+
+    const issues: ValidateResponse['password']['issues'] = [];
+    const pwd = dto.password;
+
+    if (pwd.length < 8) issues.push('TOO_SHORT');
+    // if (!/[A-Z]/.test(pwd)) issues.push('NO_UPPER');
+    // if (!/[a-z]/.test(pwd)) issues.push('NO_LOWER');
+    // if (!/[0-9]/.test(pwd)) issues.push('NO_NUMBER');
+    // if (!/[^\w\s]/.test(pwd)) issues.push('NO_SYMBOL');
+
+    // avoid passwords that contain the email local-part (before @)
+    // const local = email.split('@')[0];
+    // if (local && pwd.toLowerCase().includes(local.toLowerCase())) {
+    //   issues.push('CONTAINS_EMAIL');
+    // }
+
+    return {
+      email: { ok: !existing, ...(existing ? { reason: 'EMAIL_TAKEN' } : {}) },
+      password: { ok: issues.length === 0, issues },
+    };
+  }
 
   async register(dto: RegisterDto, userAgent: string, ip: string) {
     const existingEmail = await this.usersService.findByEmail(dto.email.trim().toLowerCase());
