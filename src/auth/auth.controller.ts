@@ -42,6 +42,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @HttpCode(200)
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userAgent = req.headers['user-agent'] || 'unknown';
     const ip =
@@ -58,6 +59,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @HttpCode(200)
   @UseGuards(RefreshGuard)
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userId = req.user?.userId;
@@ -72,29 +74,33 @@ export class AuthController {
       deviceId,
     );
     this.setRefreshCookie(res, newRefreshToken);
-    return { accessToken };
+    return { accessToken, deviceId };
   }
 
   @Post('logout')
+  @HttpCode(200)
   @UseGuards(JwtGuard)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userId = req.user?.userId;
     const deviceId = req.user?.deviceId;
 
     if (!userId || !deviceId) throw new ForbiddenException('Access denied');
-
     await this.authService.logout(userId, deviceId);
-    res.clearCookie('refreshToken');
+    res.clearCookie('refreshToken', { ...this.refreshCookieOptions });
     return { message: 'Logged out' };
   }
 
   private setRefreshCookie(res: Response, refreshToken: string) {
     res.cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      path: '/auth/refresh',
+      ...this.refreshCookieOptions,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
   }
+
+  private readonly refreshCookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/auth/refresh',
+  };
 }

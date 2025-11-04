@@ -18,6 +18,9 @@ export class UsersService {
         biography: true,
         avatarUrl: true,
         avatarColor: true,
+        roles: true,
+        lastActiveAt: true,
+        lastLoginAt: true,
       },
     });
   }
@@ -59,6 +62,13 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id },
       data: { lastLoginAt: new Date(), lastActiveAt: new Date(), status: 'ONLINE' },
+    });
+  }
+
+  async updateLastActivity(id: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data: { lastActiveAt: new Date(), status: 'ONLINE' },
     });
   }
 }
