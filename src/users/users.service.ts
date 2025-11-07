@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { AvatarColor, User } from 'generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import slugify from 'slugify';
 
 @Injectable()
 export class UsersService {
@@ -43,16 +44,19 @@ export class UsersService {
 
   async createUser(data: {
     firstName: string;
+    lastName?: string;
     email: string;
     passwordHash: string;
+    avatarUrl?: string;
     avatarColor: AvatarColor;
   }): Promise<User> {
+    const username = await this.generateUniqueUsername(data.firstName, data.email);
+
     return this.prisma.user.create({
       data: {
-        firstName: data.firstName,
+        ...data,
         email: data.email.trim().toLowerCase(),
-        passwordHash: data.passwordHash,
-        avatarColor: data.avatarColor,
+        username,
         roles: ['user'],
       },
     });
@@ -70,5 +74,22 @@ export class UsersService {
       where: { id },
       data: { lastActiveAt: new Date(), status: 'ONLINE' },
     });
+  }
+
+  private async generateUniqueUsername(seedA?: string, seedB?: string) {
+    const baseRaw = (seedA && seedA.trim()) || (seedB?.split('@')[0] ?? 'user');
+    const base = slugify(baseRaw, { lower: true, strict: true }) || 'user';
+
+    let candidate = base.toLowerCase();
+    let i = 0;
+    while (true) {
+      const exists = await this.prisma.user.findUnique({
+        where: { username: candidate },
+        select: { id: true },
+      });
+      if (!exists) return candidate;
+      i += 1;
+      candidate = `${base}${i}`;
+    }
   }
 }

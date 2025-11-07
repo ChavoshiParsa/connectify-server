@@ -31,10 +31,10 @@ export class AuthService {
     // if (!/[^\w\s]/.test(pwd)) issues.push('NO_SYMBOL');
 
     // avoid passwords that contain the email local-part (before @)
-    // const local = email.split('@')[0];
-    // if (local && pwd.toLowerCase().includes(local.toLowerCase())) {
-    //   issues.push('CONTAINS_EMAIL');
-    // }
+    const local = email.split('@')[0];
+    if (local && pwd.toLowerCase().includes(local.toLowerCase())) {
+      // issues.push('CONTAINS_EMAIL');
+    }
 
     return {
       email: { ok: !existing, ...(existing ? { reason: 'EMAIL_TAKEN' } : {}) },
@@ -48,12 +48,21 @@ export class AuthService {
       throw new BadRequestException('Email already in use');
     }
 
+    if (dto.avatarBase64) {
+      const bytes = this.base64DataUrlBytes(dto.avatarBase64);
+      const MAX = 55 * 1024;
+      if (bytes > MAX) {
+        throw new BadRequestException('Avatar image too large');
+      }
+    }
+
     const passwordHash = await argon2.hash(dto.password);
     const user = await this.usersService.createUser({
       firstName: dto.firstName,
       email: dto.email.trim().toLowerCase(),
       passwordHash,
       avatarColor: this.getRandomAvatarColor(),
+      avatarUrl: dto.avatarBase64 ?? undefined,
     });
 
     const deviceId = dto?.deviceId || crypto.randomUUID();
@@ -66,7 +75,7 @@ export class AuthService {
     const user = await this.usersService.findByEmail(dto.email);
 
     if (!user || !(await argon2.verify(user.passwordHash, dto.password))) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid_credentials');
     }
 
     const existingSession = dto?.deviceId
@@ -185,5 +194,13 @@ export class AuthService {
     const colors = Object.values(AvatarColor);
     const randomIndex = Math.floor(Math.random() * colors.length);
     return colors[randomIndex];
+  }
+
+  private base64DataUrlBytes(dataUrl: string): number {
+    const idx = dataUrl.indexOf('base64,');
+    if (idx === -1) return 0;
+    const base64 = dataUrl.substring(idx + 'base64,'.length);
+    const padding = (base64.match(/=+$/) || [''])[0].length;
+    return Math.floor((base64.length * 3) / 4) - padding;
   }
 }
