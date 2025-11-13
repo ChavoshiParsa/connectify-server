@@ -39,38 +39,34 @@ enum GroupRole {
   MEMBER
 }
 
-enum MessageStatus {
-  SENT
-  DELIVERED
-  SEEN
-}
-
 enum RoomType {
   DM
   GROUP
 }
 
 model User {
-  id          String      @id @default(auto()) @map("_id") @db.ObjectId
-  publicId    String      @unique @default(nanoid())
-  email       String      @unique
-  username    String?     @unique
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  publicId String @unique @default(nanoid())
+  email    String @unique
+  username String @unique
+  // emailLower    String    @unique @map("email_lower")
+  // usernameLower String    @unique @map("username_lower")
+
   firstName   String
   lastName    String?
   biography   String?
   avatarUrl   String?
-  avatarColor AvatarColor
+  avatarColor AvatarColor @default(SKY)
 
-  lastLoginAt  DateTime?  @default(now())
-  lastActiveAt DateTime?  @default(now())
+  lastLoginAt  DateTime?
+  lastActiveAt DateTime?
   status       UserStatus @default(ONLINE)
 
   passwordHash String
-  roles        String[]  @default([]) // e.g. ["user"], ["admin"]
+  roles        String[]     @default([])
   sessions     Session[]
-
-  messages    Message[]
-  roomMembers RoomMember[]
+  messages     Message[]
+  roomMembers  RoomMember[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -79,17 +75,20 @@ model User {
 model Room {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   type      RoomType @default(DM)
-  name      String? // used only for groups
-  avatarUrl String? // used only for groups
+  name      String?
+  avatarUrl String?
 
-  dmKey String? @unique // used only for direct messages :"minPublicId~maxPublicId"
+  dmKey         String?
+  lastMessageId String?  @unique @db.ObjectId
+  lastMessage   Message? @relation("RoomLastMessage", fields: [lastMessageId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  messages Message[]
   members  RoomMember[]
+  messages Message[]
 
+  @@unique([type, dmKey])
   @@index([type])
 }
 
@@ -101,31 +100,13 @@ model RoomMember {
   room Room @relation(fields: [roomId], references: [id])
   user User @relation(fields: [userId], references: [id])
 
-  role     GroupRole? @default(MEMBER) // used only for groups
-  joinedAt DateTime   @default(now())
+  role        GroupRole? @default(MEMBER)
+  joinedAt    DateTime   @default(now())
+  unreadCount Int        @default(0)
 
   @@unique([roomId, userId])
   @@index([roomId])
   @@index([userId])
-}
-
-model Message {
-  id       String @id @default(auto()) @map("_id") @db.ObjectId
-  roomId   String @db.ObjectId
-  room     Room   @relation(fields: [roomId], references: [id])
-  senderId String @db.ObjectId
-  sender   User   @relation(fields: [senderId], references: [id])
-
-  status      MessageStatus @default(SENT)
-  content     String
-  attachments Json? // consider a dedicated Attachment model later
-
-  createdAt DateTime  @default(now())
-  editedAt  DateTime?
-  deletedAt DateTime?
-
-  @@index([roomId, createdAt])
-  @@index([senderId, createdAt])
 }
 
 model Session {
@@ -139,20 +120,42 @@ model Session {
   ip        String
 
   createdAt DateTime @default(now())
-  expiresAt DateTime // for TTL index
+  expiresAt DateTime
 
   @@index([userId, createdAt])
   @@index([expiresAt])
   @@index([userId, hashedRt])
 }
 
-// model MessageReceipt {
-//   id          String    @id @default(auto()) @map("_id") @db.ObjectId
-//   messageId   String    @db.ObjectId
-//   userId      String    @db.ObjectId
-//   deliveredAt DateTime?
-//   readAt      DateTime?
+model Message {
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  roomId   String @db.ObjectId
+  room     Room   @relation(fields: [roomId], references: [id])
+  senderId String @db.ObjectId
+  sender   User   @relation(fields: [senderId], references: [id])
 
-//   @@unique([messageId, userId])
-//   @@index([userId])
-// }
+  content     String
+  attachments Json?
+
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  receipts      MessageReceipt[]
+  lastMessageIn Room?            @relation("RoomLastMessage")
+
+  @@index([roomId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model MessageReceipt {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  messageId   String    @db.ObjectId
+  userId      String    @db.ObjectId
+  deliveredAt DateTime  @default(now())
+  readAt      DateTime?
+  message     Message   @relation(fields: [messageId], references: [id])
+
+  @@unique([messageId, userId])
+  @@index([userId])
+}

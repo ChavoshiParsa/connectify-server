@@ -4,12 +4,12 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { CallHandler, ExecutionContext, HttpException, Injectable, NestInterceptor } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { Request, Response } from 'express';
+import { FastifyReply, FastifyRequest } from 'fastify';
 import { Observable, throwError } from 'rxjs';
 import { catchError, tap } from 'rxjs/operators';
 import { appLogger } from '../../logger/winston.logger';
 
-type ReqWithIdUser = Request & { id?: string; user?: any };
+type ReqWithIdUser = FastifyRequest & { id?: string; user?: any };
 
 const PICK_HEADER_KEYS = [
   'user-agent',
@@ -36,10 +36,10 @@ const SENSITIVE_BODY_KEYS = new Set([
 function sanitizeHeaders(headers: Record<string, any>) {
   const picked: Record<string, any> = {};
   for (const key of PICK_HEADER_KEYS) {
-    if (headers[key] !== undefined) picked[key] = headers[key];
+    if ((headers as any)[key] !== undefined) picked[key] = (headers as any)[key];
   }
   for (const key of SENSITIVE_HEADER_KEYS) {
-    if (headers[key] !== undefined) picked[key] = '[redacted]';
+    if ((headers as any)[key] !== undefined) picked[key] = '[redacted]';
   }
   return picked;
 }
@@ -70,26 +70,26 @@ export class RequestLoggerInterceptor implements NestInterceptor {
 
     const http = context.switchToHttp();
     const req = http.getRequest<ReqWithIdUser>();
-    const res = http.getResponse<Response>();
+    const reply = http.getResponse<FastifyReply>();
 
     const id = (req.headers['x-request-id'] as string) || randomUUID();
-    req.id = id;
-    res.setHeader('x-request-id', id);
+    (req as any).id = id;
+    reply.header('x-request-id', id);
 
     const method = req.method;
-    const url = req.originalUrl || req.url;
+    const url = (req as any).originalUrl || req.url;
     const start = process.hrtime.bigint();
 
     const metaBase: Record<string, any> = {
       context: 'HTTP',
       requestId: id,
-      userId: (req.user && (req.user.id ?? req.user.sub)) || undefined,
-      ip: req.ip,
-      headers: sanitizeHeaders(req.headers),
+      userId: ((req as any).user && ((req as any).user.id ?? (req as any).user.sub)) || undefined,
+      ip: (req as any).ip,
+      headers: sanitizeHeaders(req.headers as any),
     };
 
     if (shouldLogBody(method)) {
-      metaBase.body = sanitizeBody(req.body);
+      metaBase.body = sanitizeBody((req as any).body);
     }
 
     appLogger.info(`→ ${method} ${url}`, metaBase);
@@ -97,10 +97,12 @@ export class RequestLoggerInterceptor implements NestInterceptor {
     return next.handle().pipe(
       tap(() => {
         const durMs = Number(process.hrtime.bigint() - start) / 1e6;
+        const statusCode = reply.statusCode;
+        const contentLength = reply.getHeader('content-length') ?? undefined;
         appLogger.info(`← ${method} ${url} ${Math.round(durMs)}ms`, {
           ...metaBase,
-          status: res.statusCode,
-          contentLength: res.getHeader('content-length') ?? undefined,
+          status: statusCode,
+          contentLength,
         });
       }),
       catchError((err) => {

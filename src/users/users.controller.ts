@@ -1,5 +1,5 @@
 import { Controller, ForbiddenException, Get, Req, UseGuards } from '@nestjs/common';
-import { Request } from 'express';
+import { FastifyRequest } from 'fastify';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
 import { UsersService } from './users.service';
 
@@ -9,7 +9,7 @@ export class UsersController {
 
   @Get('me')
   @UseGuards(JwtGuard)
-  async getMe(@Req() req: Request) {
+  async getMe(@Req() req: FastifyRequest) {
     const userId = req.user?.userId;
 
     if (!userId) throw new ForbiddenException('Access denied');

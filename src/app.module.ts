@@ -5,12 +5,13 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { RequestLoggerInterceptor } from './common/interceptors/request-logger.interceptor';
+import { DmModule } from './dm/dm.module';
 import { NestWinstonLogger } from './logger/nest-winston.service';
 import { PrismaService } from './prisma/prisma.service';
 import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, UsersModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, UsersModule, DmModule],
   controllers: [AppController],
   providers: [
     AppService,

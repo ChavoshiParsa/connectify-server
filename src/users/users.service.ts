@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { AvatarColor, User } from 'generated/prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { AvatarColor, User, UserStatus } from 'generated/prisma/client';
 import slugify from 'slugify';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class UsersService {
@@ -65,14 +65,14 @@ export class UsersService {
   async updateLastLogin(id: string): Promise<User> {
     return this.prisma.user.update({
       where: { id },
-      data: { lastLoginAt: new Date(), lastActiveAt: new Date(), status: 'ONLINE' },
+      data: { lastLoginAt: new Date(), lastActiveAt: new Date(), status: UserStatus.ONLINE },
     });
   }
 
   async updateLastActivity(id: string): Promise<User> {
     return this.prisma.user.update({
       where: { id },
-      data: { lastActiveAt: new Date(), status: 'ONLINE' },
+      data: { lastActiveAt: new Date(), status: UserStatus.ONLINE },
     });
   }
 

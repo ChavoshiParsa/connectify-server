@@ -4,6 +4,16 @@
   "description": "",
   "author": "",
   "private": true,
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "@swc/core",
+      "argon2",
+      "prisma"
+    ]
+  },
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
@@ -22,6 +32,10 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@fastify/compress": "^8.3.0",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.1.0",
+    "@fastify/helmet": "^13.0.2",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
@@ -35,6 +49,7 @@
     "cookie-parser": "^1.4.7",
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
+    "fastify": "^5.6.2",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
@@ -47,8 +62,11 @@
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",
+    "@nestjs/platform-fastify": "^11.1.8",
+    "@nestjs/platform-socket.io": "^11.1.8",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
+    "@nestjs/websockets": "^11.1.8",
     "@swc/cli": "^0.6.0",
     "@swc/core": "^1.10.7",
     "@types/argon2": "^0.15.4",
@@ -91,6 +109,5 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
-  },
-  "packageManager": "pnpm@10.17.1"
+  }
 }
