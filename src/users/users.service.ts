@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AvatarColor, User, UserStatus } from 'generated/prisma/client';
+import { AvatarColor, UserStatus } from 'generated/prisma/client';
 import slugify from 'slugify';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -10,35 +10,72 @@ export class UsersService {
   async getMe(id: string) {
     return this.prisma.user.findUnique({
       where: { id },
-      select: {
-        publicId: true,
-        email: true,
-        username: true,
-        firstName: true,
-        lastName: true,
-        biography: true,
-        avatarUrl: true,
-        avatarColor: true,
-        roles: true,
-        lastActiveAt: true,
-        lastLoginAt: true,
+      omit: {
+        id: true,
+        passwordHash: true,
       },
     });
   }
 
-  async findById(id: string): Promise<User | null> {
+  async getTotalUnreadCount(userId: string) {
+    const result = await this.prisma.roomMember.aggregate({
+      where: { userId },
+      _sum: { unreadCount: true },
+    });
+    return result._sum.unreadCount || 0;
+  }
+
+  async searchUsers(userId: string, query: string, limit = 3) {
+    if (!query || !query.trim()) {
+      return [];
+    }
+    const q = query.trim();
+
+    const matches = await this.prisma.user.findMany({
+      where: {
+        AND: [
+          { id: { not: userId } },
+          {
+            OR: [
+              { email: { contains: q, mode: 'insensitive' } },
+              { username: { contains: q, mode: 'insensitive' } },
+              { firstName: { contains: q, mode: 'insensitive' } },
+              { lastName: { contains: q, mode: 'insensitive' } },
+            ],
+          },
+        ],
+      },
+      orderBy: { lastActiveAt: 'desc' },
+      omit: {
+        id: true,
+        passwordHash: true,
+        lastLoginAt: true,
+        roles: true,
+        biography: true,
+        updatedAt: true,
+        createdAt: true,
+      },
+      take: limit,
+    });
+
+    if (matches.length === 0) return [];
+
+    return matches;
+  }
+
+  async findById(id: string) {
     return this.prisma.user.findUnique({ where: { id } });
   }
 
-  async findByEmail(email: string): Promise<User | null> {
+  async findByEmail(email: string) {
     return this.prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
   }
 
-  async findByUsername(username: string): Promise<User | null> {
+  async findByUsername(username: string) {
     return this.prisma.user.findUnique({ where: { username: username.trim().toLowerCase() } });
   }
 
-  async findByPublicId(publicId: string): Promise<User | null> {
+  async findByPublicId(publicId: string) {
     return this.prisma.user.findUnique({ where: { publicId } });
   }
 
@@ -49,7 +86,7 @@ export class UsersService {
     passwordHash: string;
     avatarUrl?: string;
     avatarColor: AvatarColor;
-  }): Promise<User> {
+  }) {
     const username = await this.generateUniqueUsername(data.firstName, data.email);
 
     return this.prisma.user.create({
@@ -62,14 +99,14 @@ export class UsersService {
     });
   }
 
-  async updateLastLogin(id: string): Promise<User> {
+  async updateLastLogin(id: string) {
     return this.prisma.user.update({
       where: { id },
       data: { lastLoginAt: new Date(), lastActiveAt: new Date(), status: UserStatus.ONLINE },
     });
   }
 
-  async updateLastActivity(id: string): Promise<User> {
+  async updateLastActivity(id: string) {
     return this.prisma.user.update({
       where: { id },
       data: { lastActiveAt: new Date(), status: UserStatus.ONLINE },
