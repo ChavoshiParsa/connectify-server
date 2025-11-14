@@ -9,11 +9,11 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { FastifyReply, FastifyRequest } from 'fastify';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
 import { JwtGuard } from './guards/jwt.guard';
 import { RefreshGuard } from './guards/refresh.guard';
+import { Request, Response } from 'express';
 
 @Controller('auth')
 export class AuthController {
@@ -26,9 +26,13 @@ export class AuthController {
   }
 
   @Post('register')
-  async register(@Body() dto: RegisterDto, @Req() req: FastifyRequest, @Res({ passthrough: true }) res: FastifyReply) {
+  async register(@Body() dto: RegisterDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userAgent = req.headers['user-agent'] || 'unknown';
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      req.socket.remoteAddress ||
+      req.ip ||
+      'unknown';
 
     const { accessToken, refreshToken, deviceId, user } = await this.authService.register(dto, userAgent, ip);
     const { id: _id, passwordHash: _passwordHash, ...safeUser } = user;
@@ -39,9 +43,13 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  async login(@Body() dto: LoginDto, @Req() req: FastifyRequest, @Res({ passthrough: true }) res: FastifyReply) {
+  async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userAgent = req.headers['user-agent'] || 'unknown';
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      req.socket.remoteAddress ||
+      req.ip ||
+      'unknown';
 
     const { accessToken, refreshToken, deviceId, isNewDevice, user } = await this.authService.login(dto, userAgent, ip);
     const { id: _id, passwordHash: _passwordHash, ...safeUser } = user;
@@ -53,7 +61,7 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(200)
   @UseGuards(RefreshGuard)
-  async refresh(@Req() req: FastifyRequest, @Res({ passthrough: true }) res: FastifyReply) {
+  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userId = req.user?.userId;
     const refreshToken = req.user?.refreshToken;
     const deviceId = req.user?.deviceId;
@@ -72,7 +80,7 @@ export class AuthController {
   @Post('logout')
   @HttpCode(200)
   @UseGuards(JwtGuard)
-  async logout(@Req() req: FastifyRequest, @Res({ passthrough: true }) res: FastifyReply) {
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userId = req.user?.userId;
     const deviceId = req.user?.deviceId;
 
@@ -82,8 +90,8 @@ export class AuthController {
     return { message: 'Logged out' };
   }
 
-  private setRefreshCookie(reply: FastifyReply, refreshToken: string) {
-    reply.setCookie('refreshToken', refreshToken, {
+  private setRefreshCookie(reply: Response, refreshToken: string) {
+    reply.cookie('refreshToken', refreshToken, {
       ...this.refreshCookieOptions,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });

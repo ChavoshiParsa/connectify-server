@@ -11,7 +11,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { FastifyRequest } from 'fastify';
+import { Request } from 'express';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
 import { DmService } from './dm.service';
 import { GetRoomMessagesDto, MessageDto } from './dto';
@@ -22,7 +22,7 @@ export class DmController {
   constructor(private dmService: DmService) {}
 
   @Get('my-rooms')
-  async getMyRooms(@Req() req: FastifyRequest) {
+  async getMyRooms(@Req() req: Request) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -30,7 +30,7 @@ export class DmController {
   }
 
   @Get('room-details/:dmKey')
-  async getRoomDetails(@Req() req: FastifyRequest, @Param('dmKey') dmKey: string) {
+  async getRoomDetails(@Req() req: Request, @Param('dmKey') dmKey: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -38,7 +38,7 @@ export class DmController {
   }
 
   @Get('room-messages/:dmKey')
-  async getRoomMessages(@Req() req: FastifyRequest, @Param('dmKey') dmKey: string, @Query() query: GetRoomMessagesDto) {
+  async getRoomMessages(@Req() req: Request, @Param('dmKey') dmKey: string, @Query() query: GetRoomMessagesDto) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -46,7 +46,7 @@ export class DmController {
   }
 
   @Get('message-details/:messageId')
-  async getMessage(@Req() req: FastifyRequest, @Param('messageId') messageId: string) {
+  async getMessage(@Req() req: Request, @Param('messageId') messageId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -55,7 +55,7 @@ export class DmController {
 
   @Post('send-message/:recipientPublicId')
   async sendMessage(
-    @Req() req: FastifyRequest,
+    @Req() req: Request,
     @Param('recipientPublicId') recipientPublicId: string,
     @Body() dto: MessageDto,
   ) {
@@ -66,7 +66,7 @@ export class DmController {
   }
 
   @Post('set-typing/:recipientPublicId')
-  async setTyping(@Req() req: FastifyRequest, @Param('recipientPublicId') recipientPublicId: string) {
+  async setTyping(@Req() req: Request, @Param('recipientPublicId') recipientPublicId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -74,7 +74,7 @@ export class DmController {
   }
 
   @Post('seen-message/:messageId')
-  async seenMessage(@Req() req: FastifyRequest, @Param('messageId') messageId: string) {
+  async seenMessage(@Req() req: Request, @Param('messageId') messageId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -83,7 +83,7 @@ export class DmController {
   }
 
   @Post('seen-all-messages/:dmKey')
-  async seenAllMessages(@Req() req: FastifyRequest, @Param('dmKey') dmKey: string) {
+  async seenAllMessages(@Req() req: Request, @Param('dmKey') dmKey: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -92,7 +92,7 @@ export class DmController {
   }
 
   @Patch('edit-message/:messageId')
-  async editMessage(@Req() req: FastifyRequest, @Param('messageId') messageId: string, @Body() dto: MessageDto) {
+  async editMessage(@Req() req: Request, @Param('messageId') messageId: string, @Body() dto: MessageDto) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -100,7 +100,7 @@ export class DmController {
   }
 
   @Delete('delete-message/:messageId')
-  async deleteMessage(@Req() req: FastifyRequest, @Param('messageId') messageId: string) {
+  async deleteMessage(@Req() req: Request, @Param('messageId') messageId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 

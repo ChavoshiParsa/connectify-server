@@ -1,5 +1,5 @@
 import { Controller, ForbiddenException, Get, Query, Req, UseGuards } from '@nestjs/common';
-import { FastifyRequest } from 'fastify';
+import { Request } from 'express';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
 import { UsersService } from './users.service';
 
@@ -9,7 +9,7 @@ export class UsersController {
   constructor(private usersService: UsersService) {}
 
   @Get('me')
-  async getMe(@Req() req: FastifyRequest) {
+  async getMe(@Req() req: Request) {
     const userId = req.user?.userId;
 
     if (!userId) throw new ForbiddenException('Access denied');
@@ -18,7 +18,7 @@ export class UsersController {
   }
 
   @Get('me/unread-count')
-  async getTotalUnreadCount(@Req() req: FastifyRequest) {
+  async getTotalUnreadCount(@Req() req: Request) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -27,7 +27,7 @@ export class UsersController {
   }
 
   @Get('search')
-  async searchUsers(@Req() req: FastifyRequest, @Query('q') q?: string) {
+  async searchUsers(@Req() req: Request, @Query('q') q?: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
