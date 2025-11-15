@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { AvatarColor, UserStatus } from 'generated/prisma/client';
 import slugify from 'slugify';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
 export class UsersService {

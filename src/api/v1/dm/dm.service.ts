@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { RoomType } from 'generated/prisma/enums';
-import { UsersService } from 'src/users/users.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class DmService {
@@ -286,7 +286,23 @@ export class DmService {
   }
 
   async setTyping(userId: string, recipientPublicId: string) {
-    // emit a event to recipientPublicId that is typing if room is there.
+    const sender = await this.usersService.findById(userId);
+    const recipient = await this.usersService.findByPublicId(recipientPublicId);
+
+    if (!sender || !recipient) {
+      throw new ForbiddenException('Invalid sender or recipient.');
+    }
+
+    const dmKey = this.makeDmKey(sender.publicId, recipient.publicId);
+
+    // TODO: emit a typing event to recipientPublicId if room exists
+    // await this.eventEmitter.emit('typing', { dmKey, userId: sender.publicId });
+
+    return {
+      success: true,
+      dmKey,
+      recipientPublicId,
+    };
   }
 
   async seenMessage(userId: string, messageId: string) {
@@ -334,6 +350,8 @@ export class DmService {
         },
       });
     });
+
+    return { success: true, messageId };
   }
 
   async seenAllMessages(userId: string, dmKey: string) {
@@ -346,7 +364,7 @@ export class DmService {
       throw new ForbiddenException('Room not found.');
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.messageReceipt.updateMany({
         where: {
           userId,
@@ -374,6 +392,12 @@ export class DmService {
         },
       });
     });
+
+    return {
+      success: true,
+      dmKey,
+      messagesMarkedRead: result,
+    };
   }
 
   async editMessage(userId: string, messageId: string, content: string) {
@@ -385,6 +409,13 @@ export class DmService {
     if (!message) {
       throw new ForbiddenException('Message not found.');
     }
+
+    return {
+      success: true,
+      messageId: message.id,
+      content: message.content,
+      editedAt: message.editedAt,
+    };
   }
 
   async deleteMessage(userId: string, messageId: string) {
@@ -393,11 +424,15 @@ export class DmService {
       data: { deletedAt: new Date() },
     });
 
-    console.log('message', message);
-
     if (!message) {
       throw new ForbiddenException('Message not found.');
     }
+
+    return {
+      success: true,
+      messageId: message.id,
+      deletedAt: message.deletedAt,
+    };
   }
 
   private makeDmKey(a: string, b: string): string {

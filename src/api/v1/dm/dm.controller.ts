@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { JwtGuard } from 'src/auth/guards/jwt.guard';
+import { JwtGuard } from '../auth/guards/jwt.guard';
 import { DmService } from './dm.service';
 import { GetRoomMessagesDto, MessageDto } from './dto';
 

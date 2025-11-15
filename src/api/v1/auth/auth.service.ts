@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { AvatarColor } from 'generated/prisma/enums';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
 import { ValidateResponse } from './types/validate-response';
