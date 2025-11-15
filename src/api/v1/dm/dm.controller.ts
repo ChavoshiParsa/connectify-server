@@ -16,7 +16,7 @@ import { JwtGuard } from '../auth/guards/jwt.guard';
 import { DmService } from './dm.service';
 import { GetRoomMessagesDto, MessageDto } from './dto';
 
-@Controller('dm')
+@Controller('api/v1/dm')
 @UseGuards(JwtGuard)
 export class DmController {
   constructor(private dmService: DmService) {}

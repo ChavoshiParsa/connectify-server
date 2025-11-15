@@ -5,6 +5,7 @@ import * as cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { NestWinstonLogger } from './logger/nest-winston.service';
+import { NODE_ENV } from './env';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -43,7 +44,7 @@ async function bootstrap() {
   const port = configService.get<number>('PORT') || 3001;
   await app.listen(port);
 
-  logger.log(`🚀 Server is live and listening on port ${port} (${process.env.NODE_ENV ?? 'development'})`, 'Bootstrap');
+  logger.log(`🚀 Server is live and listening on port ${port} (${NODE_ENV})`, 'Bootstrap');
 }
 
 bootstrap().catch((error) => {

@@ -3,7 +3,7 @@ import { Request } from 'express';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { UsersService } from './users.service';
 
-@Controller('users')
+@Controller('api/v1/users')
 @UseGuards(JwtGuard)
 export class UsersController {
   constructor(private usersService: UsersService) {}

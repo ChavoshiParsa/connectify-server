@@ -9,13 +9,14 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { CookieOptions, Request, Response } from 'express';
+import { IS_PROD } from 'src/env';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
 import { JwtGuard } from './guards/jwt.guard';
 import { RefreshGuard } from './guards/refresh.guard';
-import { Request, Response } from 'express';
 
-@Controller('auth')
+@Controller('api/v1/auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
@@ -97,10 +98,10 @@ export class AuthController {
     });
   }
 
-  private readonly refreshCookieOptions = {
+  private readonly refreshCookieOptions: CookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'none' as const,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? 'none' : 'strict',
     path: '/auth/refresh',
   };
 }

@@ -1,3 +1,4 @@
+import { IS_PROD } from 'src/env';
 import { createLogger, format, transports } from 'winston';
 import 'winston-daily-rotate-file';
 
@@ -24,7 +25,7 @@ export const appLogger = createLogger({
     fileTransport,
     new transports.Console({
       format: format.combine(format.colorize(), format.timestamp(), logFormat),
-      level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+      level: IS_PROD ? 'info' : 'debug',
     }),
   ],
 });
