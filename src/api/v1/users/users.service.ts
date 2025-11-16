@@ -106,10 +106,10 @@ export class UsersService {
     });
   }
 
-  async updateLastActivity(id: string) {
+  async updateLastActivity(id: string, status?: UserStatus) {
     return this.prisma.user.update({
       where: { id },
-      data: { lastActiveAt: new Date(), status: UserStatus.ONLINE },
+      data: { lastActiveAt: new Date(), status: status ?? UserStatus.ONLINE },
     });
   }
 

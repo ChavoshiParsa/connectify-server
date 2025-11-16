@@ -1,4 +1,5 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RoomType } from 'generated/prisma/enums';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -8,6 +9,7 @@ export class DmService {
   constructor(
     private prisma: PrismaService,
     private usersService: UsersService,
+    private eventEmitter: EventEmitter2,
   ) {}
 
   async getMyRooms(userId: string) {
@@ -84,17 +86,27 @@ export class DmService {
   }
 
   async getRoomDetails(userId: string, dmKey: string) {
-    return await this.prisma.room.findUnique({
-      where: { type_dmKey: { type: RoomType.DM, dmKey } },
+    this.validateDmKey(dmKey);
+
+    const room = await this.prisma.room.findUnique({
+      where: { type_dmKey: { type: RoomType.DM, dmKey }, members: { some: { userId } } },
       select: {
         dmKey: true,
         members: true,
         updatedAt: true,
       },
     });
+
+    if (!room) {
+      throw new NotFoundException('Room not found or access denied.');
+    }
+
+    return room;
   }
 
   async getRoomMessages(userId: string, dmKey: string, cursor?: Date | string, limit: number = 50) {
+    this.validateDmKey(dmKey);
+
     const validLimit = Math.min(Math.max(limit, 1), 100);
 
     const room = await this.prisma.room.findUnique({
@@ -108,13 +120,13 @@ export class DmService {
     });
 
     if (!room) {
-      throw new ForbiddenException('Room not found or access denied.');
+      throw new NotFoundException('Room not found or access denied.');
     }
 
     const cursorDate = cursor ? (cursor instanceof Date ? cursor : new Date(cursor)) : new Date();
 
     if (cursor && isNaN(cursorDate.getTime())) {
-      throw new ForbiddenException('Invalid cursor format. Expected ISO 8601 date string.');
+      throw new BadRequestException('Invalid cursor format. Expected ISO 8601 date string.');
     }
 
     const messages = await this.prisma.message.findMany({
@@ -161,7 +173,7 @@ export class DmService {
   }
 
   async getMessage(userId: string, messageId: string) {
-    return await this.prisma.message.findUnique({
+    const message = await this.prisma.message.findUnique({
       where: {
         id: messageId,
         OR: [
@@ -198,6 +210,12 @@ export class DmService {
         },
       },
     });
+
+    if (!message) {
+      throw new NotFoundException('Message not found.');
+    }
+
+    return message;
   }
 
   async sendMessage(userId: string, recipientPublicId: string, content: string) {
@@ -205,7 +223,11 @@ export class DmService {
     const recipient = await this.usersService.findByPublicId(recipientPublicId);
 
     if (!sender || !recipient) {
-      throw new ForbiddenException('Invalid sender or recipient.');
+      throw new NotFoundException('Invalid sender or recipient.');
+    }
+
+    if (sender.publicId === recipient.publicId) {
+      throw new BadRequestException('Cannot send message to yourself.');
     }
 
     const dmKey = this.makeDmKey(sender.publicId, recipient.publicId);
@@ -277,6 +299,14 @@ export class DmService {
 
     await this.usersService.updateLastActivity(sender.id);
 
+    this.eventEmitter.emit('message.new', {
+      messageId: message.id,
+      dmKey,
+      senderPublicId: sender.publicId,
+      recipientPublicId: recipient.publicId,
+      createdAt: message.createdAt,
+    });
+
     return {
       messageId: message.id,
       content: message.content,
@@ -285,130 +315,48 @@ export class DmService {
     };
   }
 
-  async setTyping(userId: string, recipientPublicId: string) {
-    const sender = await this.usersService.findById(userId);
-    const recipient = await this.usersService.findByPublicId(recipientPublicId);
-
-    if (!sender || !recipient) {
-      throw new ForbiddenException('Invalid sender or recipient.');
-    }
-
-    const dmKey = this.makeDmKey(sender.publicId, recipient.publicId);
-
-    // TODO: emit a typing event to recipientPublicId if room exists
-    // await this.eventEmitter.emit('typing', { dmKey, userId: sender.publicId });
-
-    return {
-      success: true,
-      dmKey,
-      recipientPublicId,
-    };
-  }
-
-  async seenMessage(userId: string, messageId: string) {
-    await this.prisma.$transaction(async (tx) => {
-      const message = await tx.message.findUnique({
-        where: { id: messageId },
-        select: { roomId: true },
-      });
-
-      if (!message) {
-        throw new ForbiddenException('Message not found.');
-      }
-
-      const receipt = await tx.messageReceipt.findUnique({
-        where: {
-          messageId_userId: { messageId, userId },
-          readAt: {
-            isSet: false,
-          },
-        },
-        select: { readAt: true },
-      });
-
-      if (!receipt) {
-        throw new ForbiddenException('Message receipt not found.');
-      }
-
-      await tx.messageReceipt.update({
-        where: {
-          messageId_userId: { messageId, userId },
-        },
-        data: { readAt: new Date() },
-      });
-
-      await tx.roomMember.update({
-        where: {
-          roomId_userId: {
-            roomId: message.roomId,
-            userId,
-          },
-          unreadCount: { gt: 0 },
-        },
-        data: {
-          unreadCount: { decrement: 1 },
-        },
-      });
-    });
-
-    return { success: true, messageId };
-  }
-
-  async seenAllMessages(userId: string, dmKey: string) {
-    const room = await this.prisma.room.findUnique({
-      where: { type_dmKey: { type: RoomType.DM, dmKey } },
-      select: { id: true },
-    });
-
-    if (!room) {
-      throw new ForbiddenException('Room not found.');
-    }
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      await tx.messageReceipt.updateMany({
-        where: {
-          userId,
-          message: {
-            roomId: room.id,
-          },
-          readAt: {
-            isSet: false,
-          },
-        },
-        data: {
-          readAt: new Date(),
-        },
-      });
-
-      await tx.roomMember.update({
-        where: {
-          roomId_userId: {
-            roomId: room.id,
-            userId,
-          },
-        },
-        data: {
-          unreadCount: 0,
-        },
-      });
-    });
-
-    return {
-      success: true,
-      dmKey,
-      messagesMarkedRead: result,
-    };
-  }
-
   async editMessage(userId: string, messageId: string, content: string) {
-    const message = await this.prisma.message.update({
-      where: { id: messageId, senderId: userId, deletedAt: { isSet: false } },
-      data: { content, editedAt: new Date() },
+    const existingMessage = await this.prisma.message.findFirst({
+      where: {
+        id: messageId,
+        senderId: userId,
+        deletedAt: { isSet: false },
+      },
     });
 
-    if (!message) {
-      throw new ForbiddenException('Message not found.');
+    if (!existingMessage) {
+      throw new NotFoundException('Message not found or you do not have permission to edit it.');
     }
+
+    const message = await this.prisma.message.update({
+      where: { id: messageId },
+      data: { content, editedAt: new Date() },
+      select: {
+        id: true,
+        content: true,
+        editedAt: true,
+        room: {
+          select: {
+            dmKey: true,
+          },
+        },
+        sender: {
+          select: {
+            publicId: true,
+          },
+        },
+      },
+    });
+
+    const recipientPublicId = this.getPartnerPublicKey(message.sender.publicId, message.room.dmKey as string);
+
+    this.eventEmitter.emit('message.edited', {
+      messageId: message.id,
+      dmKey: message.room.dmKey,
+      editorPublicId: message.sender.publicId,
+      recipientPublicId,
+      editedAt: message.editedAt,
+    });
 
     return {
       success: true,
@@ -419,14 +367,46 @@ export class DmService {
   }
 
   async deleteMessage(userId: string, messageId: string) {
-    const message = await this.prisma.message.update({
-      where: { id: messageId, senderId: userId, deletedAt: { isSet: false } },
-      data: { deletedAt: new Date() },
+    const existingMessage = await this.prisma.message.findFirst({
+      where: {
+        id: messageId,
+        senderId: userId,
+        deletedAt: { isSet: false },
+      },
     });
 
-    if (!message) {
-      throw new ForbiddenException('Message not found.');
+    if (!existingMessage) {
+      throw new NotFoundException('Message not found or you do not have permission to delete it.');
     }
+
+    const message = await this.prisma.message.update({
+      where: { id: messageId },
+      data: { deletedAt: new Date() },
+      select: {
+        id: true,
+        deletedAt: true,
+        room: {
+          select: {
+            dmKey: true,
+          },
+        },
+        sender: {
+          select: {
+            publicId: true,
+          },
+        },
+      },
+    });
+
+    const recipientPublicId = this.getPartnerPublicKey(message.sender.publicId, message.room.dmKey as string);
+
+    this.eventEmitter.emit('message.deleted', {
+      messageId: message.id,
+      dmKey: message.room.dmKey,
+      deletedByPublicId: message.sender.publicId,
+      recipientPublicId,
+      deletedAt: message.deletedAt,
+    });
 
     return {
       success: true,
@@ -435,13 +415,223 @@ export class DmService {
     };
   }
 
+  async seenMessage(userId: string, messageId: string) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const message = await tx.message.findUnique({
+        where: { id: messageId },
+        select: {
+          roomId: true,
+          senderId: true,
+          sender: {
+            select: { publicId: true },
+          },
+          room: {
+            select: {
+              dmKey: true,
+            },
+          },
+        },
+      });
+
+      if (!message) {
+        throw new NotFoundException('Message not found.');
+      }
+
+      if (message.senderId === userId) {
+        throw new BadRequestException('You cannot mark your own messages as read.');
+      }
+
+      const receipt = await tx.messageReceipt.findUnique({
+        where: {
+          messageId_userId: { messageId, userId },
+        },
+        select: { readAt: true },
+      });
+
+      if (!receipt) {
+        throw new NotFoundException('Message receipt not found. You may not have access to this message.');
+      }
+
+      if (receipt.readAt) {
+        return { alreadyRead: true };
+      }
+
+      await tx.messageReceipt.update({
+        where: {
+          messageId_userId: { messageId, userId },
+        },
+        data: { readAt: new Date() },
+      });
+
+      await tx.roomMember.updateMany({
+        where: {
+          roomId: message.roomId,
+          userId,
+          unreadCount: { gt: 0 },
+        },
+        data: {
+          unreadCount: { decrement: 1 },
+        },
+      });
+
+      return { alreadyRead: false, readAt: new Date(), publicId: message.sender.publicId, dm: message.room.dmKey };
+    });
+
+    if (!result.alreadyRead) {
+      const senderPublicId = result.publicId as string;
+      const seenByPublicId = this.getPartnerPublicKey(senderPublicId, result.dm as string);
+
+      this.eventEmitter.emit('message.seen', {
+        messageId,
+        dmKey: result.dm as string,
+        seenByPublicId: seenByPublicId,
+        recipientPublicId: senderPublicId,
+        readAt: result.readAt,
+      });
+    }
+
+    return {
+      success: true,
+      messageId,
+      alreadyRead: result.alreadyRead,
+    };
+  }
+
+  async seenAllMessages(userId: string, dmKey: string) {
+    this.validateDmKey(dmKey);
+
+    const room = await this.prisma.room.findUnique({
+      where: { type_dmKey: { type: RoomType.DM, dmKey } },
+      select: { id: true },
+    });
+
+    if (!room) {
+      throw new NotFoundException('Room not found.');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const membership = await tx.roomMember.findUnique({
+        where: {
+          roomId_userId: {
+            roomId: room.id,
+            userId,
+          },
+        },
+      });
+
+      if (!membership) {
+        throw new ForbiddenException('You are not a member of this room.');
+      }
+
+      const updateResult = await tx.messageReceipt.updateMany({
+        where: {
+          userId,
+          message: {
+            roomId: room.id,
+            senderId: { not: userId },
+          },
+          readAt: { isSet: false },
+        },
+        data: {
+          readAt: new Date(),
+        },
+      });
+
+      if (updateResult.count > 0) {
+        await tx.roomMember.update({
+          where: {
+            roomId_userId: {
+              roomId: room.id,
+              userId,
+            },
+          },
+          data: {
+            unreadCount: 0,
+          },
+        });
+      }
+
+      return { count: updateResult.count, read: new Date() };
+    });
+
+    const user = await this.usersService.findById(userId);
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const recipientPublicId = this.getPartnerPublicKey(user.publicId, dmKey);
+
+    this.eventEmitter.emit('message.seen.all', {
+      dmKey,
+      seenAllByPublicId: user.publicId,
+      recipientPublicId,
+      readAt: result.read,
+    });
+
+    return {
+      success: true,
+      dmKey,
+      messagesMarkedRead: result.count,
+    };
+  }
+
+  async setTyping(userId: string, recipientPublicId: string) {
+    const sender = await this.usersService.findById(userId);
+    const recipient = await this.usersService.findByPublicId(recipientPublicId);
+
+    if (!sender || !recipient) {
+      throw new NotFoundException('Invalid sender or recipient.');
+    }
+
+    const dmKey = this.makeDmKey(sender.publicId, recipient.publicId);
+
+    this.eventEmitter.emit('typing.start', {
+      dmKey,
+      userPublicId: sender.publicId,
+      recipientPublicId: recipient.publicId,
+    });
+
+    return {
+      success: true,
+      dmKey,
+      recipientPublicId,
+    };
+  }
+
   private makeDmKey(a: string, b: string): string {
     return [a, b].sort().join('~');
   }
 
-  // private parseDmKey(dmKey: string): [string, string] {
-  //   const parts = dmKey.split('~');
-  //   if (parts.length !== 2) throw new Error('Invalid dmKey format');
-  //   return parts as [string, string];
-  // }
+  private validateDmKey(dmKey: string): void {
+    if (!dmKey || typeof dmKey !== 'string') {
+      throw new BadRequestException('DM key is required.');
+    }
+
+    const parts = dmKey.split('~');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new BadRequestException('Invalid DM key format. Expected format: userA~userB');
+    }
+
+    if (parts[0] > parts[1]) {
+      throw new BadRequestException('Invalid DM key format. User IDs must be in sorted order.');
+    }
+  }
+
+  private parseDmKey(dmKey: string): [string, string] {
+    this.validateDmKey(dmKey);
+    return dmKey.split('~') as [string, string];
+  }
+
+  private getPartnerPublicKey(publicId: string, dmKey: string) {
+    const [a, b] = this.parseDmKey(dmKey);
+
+    if (publicId === a) {
+      return b;
+    } else if (publicId === b) {
+      return a;
+    } else {
+      throw new BadRequestException('Public ID is not part of the DM key.');
+    }
+  }
 }

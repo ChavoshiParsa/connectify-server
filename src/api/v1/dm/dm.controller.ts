@@ -4,6 +4,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -66,6 +67,7 @@ export class DmController {
   }
 
   @Post('set-typing/:recipientPublicId')
+  @HttpCode(200)
   async setTyping(@Req() req: Request, @Param('recipientPublicId') recipientPublicId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
@@ -74,21 +76,21 @@ export class DmController {
   }
 
   @Post('seen-message/:messageId')
+  @HttpCode(200)
   async seenMessage(@Req() req: Request, @Param('messageId') messageId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    await this.dmService.seenMessage(userId, messageId);
-    return { message: 'Message marked as seen' };
+    return this.dmService.seenMessage(userId, messageId);
   }
 
   @Post('seen-all-messages/:dmKey')
+  @HttpCode(200)
   async seenAllMessages(@Req() req: Request, @Param('dmKey') dmKey: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    await this.dmService.seenAllMessages(userId, dmKey);
-    return { message: 'All messages marked as seen' };
+    return this.dmService.seenAllMessages(userId, dmKey);
   }
 
   @Patch('edit-message/:messageId')

@@ -101,7 +101,7 @@ export class AuthController {
   private readonly refreshCookieOptions: CookieOptions = {
     httpOnly: true,
     secure: IS_PROD,
-    sameSite: IS_PROD ? 'none' : 'strict',
-    path: '/auth/refresh',
+    sameSite: IS_PROD ? 'none' : 'lax',
+    path: '/',
   };
 }
