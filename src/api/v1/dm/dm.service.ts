@@ -12,6 +12,8 @@ export class DmService {
     private eventEmitter: EventEmitter2,
   ) {}
 
+  // APIs
+
   async getMyRooms(userId: string) {
     const roomMembers = await this.prisma.roomMember.findMany({
       where: {
@@ -31,90 +33,69 @@ export class DmService {
       select: {
         unreadCount: true,
         room: {
-          select: {
-            dmKey: true,
-            updatedAt: true,
-            lastMessage: {
-              select: {
-                id: true,
-                content: true,
-                createdAt: true,
-                editedAt: true,
-                sender: {
-                  select: {
-                    firstName: true,
-                    lastName: true,
-                  },
-                },
-                receipts: {
-                  select: {
-                    readAt: true,
-                  },
-                },
-              },
-            },
-            members: {
-              where: {
-                userId: { not: userId },
-              },
-              select: {
-                user: {
-                  omit: {
-                    id: true,
-                    passwordHash: true,
-                    lastLoginAt: true,
-                    roles: true,
-                    biography: true,
-                    updatedAt: true,
-                    createdAt: true,
-                  },
-                },
-              },
-            },
-          },
+          select: this.dmRoomSelectForUser(userId),
         },
       },
     });
 
-    return roomMembers.map((rm) => ({
-      dmKey: rm.room.dmKey,
-      unreadCount: rm.unreadCount,
-      lastMessage: rm.room.lastMessage,
-      recipient: rm.room.members[0]?.user || null,
-      updatedAt: rm.room.updatedAt,
-    }));
+    return roomMembers.map((rm) => {
+      const room = rm.room;
+      const recipient = room.members[0]?.user;
+
+      if (!recipient) {
+        throw new NotFoundException('Recipient not found for this DM room.');
+      }
+
+      return {
+        dmKey: room.dmKey as string,
+        updatedAt: room.updatedAt,
+        lastMessage: room.lastMessage,
+        members: room.members,
+        recipient,
+        unreadCount: rm.unreadCount,
+      };
+    });
   }
 
   async getRoomDetails(userId: string, dmKey: string) {
-    this.validateDmKey(dmKey);
-
-    const room = await this.prisma.room.findUnique({
-      where: { type_dmKey: { type: RoomType.DM, dmKey }, members: { some: { userId } } },
-      select: {
-        dmKey: true,
-        members: true,
-        updatedAt: true,
+    const room = await this.prisma.room.findFirst({
+      where: {
+        type: RoomType.DM,
+        dmKey,
+        members: {
+          some: { userId },
+        },
       },
+      select: this.dmRoomSelectForUser(userId),
     });
 
     if (!room) {
       throw new NotFoundException('Room not found or access denied.');
     }
 
-    return room;
+    const recipient = room.members[0]?.user;
+
+    if (!recipient) {
+      throw new NotFoundException('Recipient not found for this DM room.');
+    }
+
+    return {
+      dmKey: room.dmKey as string,
+      updatedAt: room.updatedAt,
+      lastMessage: room.lastMessage,
+      members: room.members,
+      recipient,
+    };
   }
 
   async getRoomMessages(userId: string, dmKey: string, cursor?: Date | string, limit: number = 50) {
-    this.validateDmKey(dmKey);
-
     const validLimit = Math.min(Math.max(limit, 1), 100);
 
-    const room = await this.prisma.room.findUnique({
+    const room = await this.prisma.room.findFirst({
       where: {
-        type_dmKey: { type: RoomType.DM, dmKey },
-        members: {
-          some: { userId },
-        },
+        type: RoomType.DM,
+        dmKey,
+        members: { some: { userId } },
       },
       select: { id: true },
     });
@@ -137,29 +118,7 @@ export class DmService {
       },
       orderBy: { createdAt: 'desc' },
       take: validLimit + 1,
-      select: {
-        id: true,
-        content: true,
-        createdAt: true,
-        editedAt: true,
-        sender: {
-          omit: {
-            id: true,
-            passwordHash: true,
-            lastLoginAt: true,
-            roles: true,
-            biography: true,
-            updatedAt: true,
-            createdAt: true,
-          },
-        },
-        receipts: {
-          select: {
-            deliveredAt: true,
-            readAt: true,
-          },
-        },
-      },
+      select: this.messageBaseSelect,
     });
 
     const hasMore = messages.length > validLimit;
@@ -172,10 +131,11 @@ export class DmService {
     };
   }
 
-  async getMessage(userId: string, messageId: string) {
-    const message = await this.prisma.message.findUnique({
+  async getMessageDetails(userId: string, messageId: string) {
+    const message = await this.prisma.message.findFirst({
       where: {
         id: messageId,
+        deletedAt: { isSet: false },
         OR: [
           { senderId: userId },
           {
@@ -185,30 +145,7 @@ export class DmService {
           },
         ],
       },
-      select: {
-        id: true,
-        content: true,
-        createdAt: true,
-        editedAt: true,
-        deletedAt: true,
-        sender: {
-          omit: {
-            id: true,
-            passwordHash: true,
-            lastLoginAt: true,
-            roles: true,
-            biography: true,
-            updatedAt: true,
-            createdAt: true,
-          },
-        },
-        room: {
-          select: {
-            dmKey: true,
-            updatedAt: true,
-          },
-        },
-      },
+      select: this.messageWithRoomSelect,
     });
 
     if (!message) {
@@ -456,11 +393,13 @@ export class DmService {
         return { alreadyRead: true };
       }
 
+      const readAt = new Date();
+
       await tx.messageReceipt.update({
         where: {
           messageId_userId: { messageId, userId },
         },
-        data: { readAt: new Date() },
+        data: { readAt },
       });
 
       await tx.roomMember.updateMany({
@@ -474,7 +413,12 @@ export class DmService {
         },
       });
 
-      return { alreadyRead: false, readAt: new Date(), publicId: message.sender.publicId, dm: message.room.dmKey };
+      return {
+        alreadyRead: false,
+        readAt,
+        publicId: message.sender.publicId,
+        dm: message.room.dmKey,
+      };
     });
 
     if (!result.alreadyRead) {
@@ -484,7 +428,7 @@ export class DmService {
       this.eventEmitter.emit('message.seen', {
         messageId,
         dmKey: result.dm as string,
-        seenByPublicId: seenByPublicId,
+        seenByPublicId,
         recipientPublicId: senderPublicId,
         readAt: result.readAt,
       });
@@ -498,8 +442,6 @@ export class DmService {
   }
 
   async seenAllMessages(userId: string, dmKey: string) {
-    this.validateDmKey(dmKey);
-
     const room = await this.prisma.room.findUnique({
       where: { type_dmKey: { type: RoomType.DM, dmKey } },
       select: { id: true },
@@ -523,6 +465,8 @@ export class DmService {
         throw new ForbiddenException('You are not a member of this room.');
       }
 
+      const readAt = new Date();
+
       const updateResult = await tx.messageReceipt.updateMany({
         where: {
           userId,
@@ -533,7 +477,7 @@ export class DmService {
           readAt: { isSet: false },
         },
         data: {
-          readAt: new Date(),
+          readAt,
         },
       });
 
@@ -551,7 +495,7 @@ export class DmService {
         });
       }
 
-      return { count: updateResult.count, read: new Date() };
+      return { count: updateResult.count, read: readAt };
     });
 
     const user = await this.usersService.findById(userId);
@@ -599,39 +543,90 @@ export class DmService {
     };
   }
 
+  // Helpers
+
   private makeDmKey(a: string, b: string): string {
     return [a, b].sort().join('~');
   }
 
-  private validateDmKey(dmKey: string): void {
-    if (!dmKey || typeof dmKey !== 'string') {
-      throw new BadRequestException('DM key is required.');
-    }
-
-    const parts = dmKey.split('~');
-    if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      throw new BadRequestException('Invalid DM key format. Expected format: userA~userB');
-    }
-
-    if (parts[0] > parts[1]) {
-      throw new BadRequestException('Invalid DM key format. User IDs must be in sorted order.');
-    }
+  private getPartnerPublicKey(publicId: string, dmKey: string): string | null {
+    const [a, b] = dmKey.split('~') as [string, string];
+    return publicId === a ? b : publicId === b ? a : null;
   }
 
-  private parseDmKey(dmKey: string): [string, string] {
-    this.validateDmKey(dmKey);
-    return dmKey.split('~') as [string, string];
+  private readonly safeUserSelect = {
+    omit: {
+      id: true,
+      passwordHash: true,
+      lastLoginAt: true,
+      roles: true,
+      biography: true,
+      updatedAt: true,
+      createdAt: true,
+    },
+  } as const;
+
+  private readonly lastMessageSelect = {
+    id: true,
+    content: true,
+    createdAt: true,
+    editedAt: true,
+    sender: {
+      select: {
+        firstName: true,
+        lastName: true,
+      },
+    },
+    receipts: {
+      select: {
+        readAt: true,
+      },
+    },
+  } as const;
+
+  private get messageBaseSelect() {
+    return {
+      id: true,
+      content: true,
+      createdAt: true,
+      editedAt: true,
+      sender: this.safeUserSelect,
+      receipts: {
+        select: {
+          deliveredAt: true,
+          readAt: true,
+        },
+      },
+    } as const;
   }
 
-  private getPartnerPublicKey(publicId: string, dmKey: string) {
-    const [a, b] = this.parseDmKey(dmKey);
+  private get messageWithRoomSelect() {
+    return {
+      ...this.messageBaseSelect,
+      room: {
+        select: {
+          dmKey: true,
+          updatedAt: true,
+        },
+      },
+    } as const;
+  }
 
-    if (publicId === a) {
-      return b;
-    } else if (publicId === b) {
-      return a;
-    } else {
-      throw new BadRequestException('Public ID is not part of the DM key.');
-    }
+  private dmRoomSelectForUser(userId: string) {
+    return {
+      dmKey: true,
+      updatedAt: true,
+      lastMessage: {
+        select: this.lastMessageSelect,
+      },
+      members: {
+        where: {
+          userId: { not: userId },
+        },
+        select: {
+          user: this.safeUserSelect,
+        },
+      },
+    } as const;
   }
 }

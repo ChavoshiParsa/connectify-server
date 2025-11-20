@@ -15,7 +15,7 @@ import {
 import { Request } from 'express';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { DmService } from './dm.service';
-import { GetRoomMessagesDto, MessageDto } from './dto';
+import { DmKeyDto, GetRoomMessagesDto, MessageDto } from './dto';
 
 @Controller('api/v1/dm')
 @UseGuards(JwtGuard)
@@ -35,7 +35,9 @@ export class DmController {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    return this.dmService.getRoomDetails(userId, dmKey);
+    const sortedDmKey = DmKeyDto.sortAndValidate(dmKey);
+
+    return this.dmService.getRoomDetails(userId, sortedDmKey);
   }
 
   @Get('room-messages/:dmKey')
@@ -43,15 +45,17 @@ export class DmController {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    return this.dmService.getRoomMessages(userId, dmKey, query.cursor, query.limit ?? 50);
+    const sortedDmKey = DmKeyDto.sortAndValidate(dmKey);
+
+    return this.dmService.getRoomMessages(userId, sortedDmKey, query.cursor, query.limit ?? 50);
   }
 
   @Get('message-details/:messageId')
-  async getMessage(@Req() req: Request, @Param('messageId') messageId: string) {
+  async getMessageDetails(@Req() req: Request, @Param('messageId') messageId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    return this.dmService.getMessage(userId, messageId);
+    return this.dmService.getMessageDetails(userId, messageId);
   }
 
   @Post('send-message/:recipientPublicId')
@@ -90,7 +94,9 @@ export class DmController {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    return this.dmService.seenAllMessages(userId, dmKey);
+    const sortedDmKey = DmKeyDto.sortAndValidate(dmKey);
+
+    return this.dmService.seenAllMessages(userId, sortedDmKey);
   }
 
   @Patch('edit-message/:messageId')

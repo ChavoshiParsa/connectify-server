@@ -1,3 +1,9 @@
+export type JwtPayload = {
+  sub: string;
+  email: string;
+  deviceId: string;
+};
+
 export type ValidateResponse = {
   email: { ok: boolean; reason?: 'EMAIL_TAKEN' };
   password: {

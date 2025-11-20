@@ -11,21 +11,32 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { JwtPayload } from 'src/api/v1/auth/types/jwt-payload.interface';
+import type { JwtPayload } from 'src/api/v1/auth/types';
 import { UsersService } from 'src/api/v1/users/users.service';
 import { appLogger } from 'src/logger/winston.logger';
-
-interface AuthenticatedSocket extends Socket {
-  userId?: string;
-  publicId?: string;
-}
+import type {
+  AuthenticatedSocket,
+  MessageDeletedEventData,
+  MessageDeletedPayload,
+  MessageEditedEventData,
+  MessageEditedPayload,
+  MessageNewEventData,
+  MessageNewPayload,
+  MessageSeenAllEventData,
+  MessageSeenAllPayload,
+  MessageSeenEventData,
+  MessageSeenPayload,
+  TypingStartEventData,
+  TypingStartPayload,
+  UserProfileUpdatedPayload,
+  UserStatusPayload,
+} from './types';
 
 @Injectable()
 @WebSocketGateway({
   namespace: '/events',
   cors: {
     origin: process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()) || [],
-    credentials: true,
   },
 })
 export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
@@ -35,34 +46,34 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   private readonly userSockets = new Map<string, Set<string>>();
 
   constructor(
-    private jwtService: JwtService,
-    private configService: ConfigService,
-    private usersService: UsersService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+    private readonly usersService: UsersService,
   ) {}
 
   afterInit(_server: Server) {
-    appLogger.info('WebSocket Gateway initialized', { context: EventsGateway.name });
+    appLogger.info('WebSocket Gateway initialized', { context: 'EventsGateway' });
   }
 
   async handleConnection(client: AuthenticatedSocket) {
     try {
       const token = this.extractTokenFromHandshake(client);
       if (!token) {
-        appLogger.warn(`Client ${client.id} connection rejected: No token provided`, { context: EventsGateway.name });
+        appLogger.warn(`Client ${client.id} connection rejected: No token provided`, { context: 'EventsGateway' });
         client.disconnect();
         return;
       }
 
       const payload = await this.verifyToken(token);
       if (!payload) {
-        appLogger.warn(`Client ${client.id} connection rejected: Invalid token`, { context: EventsGateway.name });
+        appLogger.warn(`Client ${client.id} connection rejected: Invalid token`, { context: 'EventsGateway' });
         client.disconnect();
         return;
       }
 
       const user = await this.usersService.findById(payload.sub);
       if (!user) {
-        appLogger.warn(`Client ${client.id} connection rejected: User not found`, { context: EventsGateway.name });
+        appLogger.warn(`Client ${client.id} connection rejected: User not found`, { context: 'EventsGateway' });
         client.disconnect();
         return;
       }
@@ -77,22 +88,24 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
       await client.join(`user:${user.publicId}`);
 
-      appLogger.info(`Client ${client.id} connected as user ${user.publicId}`, { context: EventsGateway.name });
+      appLogger.info(`Client ${client.id} connected as (user ${user.publicId})`, { context: 'EventsGateway' });
 
       await this.usersService.updateLastActivity(user.id);
 
-      client.broadcast.emit('user:status', {
+      const statusPayload: UserStatusPayload = {
         publicId: user.publicId,
         status: 'ONLINE',
         lastActiveAt: new Date(),
-      });
+      };
+
+      client.broadcast.emit('user:status', statusPayload);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      appLogger.error(`Error handling connection: ${errorMessage}`, { context: EventsGateway.name });
+      appLogger.error(`Error handling connection: ${errorMessage}`, { context: 'EventsGateway' });
       client.disconnect();
-    } finally {
-      // console.log('user socket:', this.userSockets);
     }
+
+    console.log('userSockets:', this.userSockets);
   }
 
   async handleDisconnect(client: AuthenticatedSocket) {
@@ -102,21 +115,25 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     if (userSocketSet) {
       userSocketSet.delete(client.id);
 
-      if (userSocketSet.size === 0) {
+      const isLastSession = userSocketSet.size === 0;
+
+      if (isLastSession) {
         this.userSockets.delete(client.userId);
 
-        this.server.emit('user:status', {
-          publicId: client.publicId,
+        const statusPayload: UserStatusPayload = {
+          publicId: client.publicId!,
           status: 'OFFLINE',
           lastActiveAt: new Date(),
-        });
+        };
+
+        this.server.emit('user:status', statusPayload);
       }
-      await this.usersService.updateLastActivity(client.userId, userSocketSet.size === 0 ? 'OFFLINE' : undefined);
+
+      await this.usersService.updateLastActivity(client.userId, isLastSession ? 'OFFLINE' : undefined);
     }
 
-    appLogger.info(`Client ${client.id} disconnected (user: ${client.publicId})`, { context: EventsGateway.name });
-
-    // console.log('user socket:', this.userSockets);
+    appLogger.info(`Client ${client.id} disconnected (user: ${client.publicId})`, { context: 'EventsGateway' });
+    console.log('userSockets:', this.userSockets);
   }
 
   @SubscribeMessage('ping')
@@ -125,132 +142,78 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   @OnEvent('message.new')
-  handleNewMessage(payload: {
-    messageId: string;
-    dmKey: string;
-    senderPublicId: string;
-    recipientPublicId: string;
-    createdAt: Date;
-  }) {
-    appLogger.debug(`Emitting new message event to ${payload.recipientPublicId}`, { context: EventsGateway.name });
+  handleNewMessage({ recipientPublicId, ...data }: MessageNewPayload) {
+    this.emitToUsers<MessageNewEventData>([recipientPublicId, data.senderPublicId], 'message:new', data);
 
-    this.server.to(`user:${payload.recipientPublicId}`).emit('message:new', {
-      messageId: payload.messageId,
-      dmKey: payload.dmKey,
-      senderPublicId: payload.senderPublicId,
-      createdAt: payload.createdAt,
-    });
+    appLogger.debug(`Emitting new message event to ${recipientPublicId}`, { context: 'EventsGateway' });
   }
 
   @OnEvent('message.edited')
-  handleEditedMessage(payload: {
-    messageId: string;
-    dmKey: string;
-    editorPublicId: string;
-    recipientPublicId: string;
-    editedAt: Date;
-  }) {
-    appLogger.debug(`Emitting message edited event for ${payload.recipientPublicId}`, { context: EventsGateway.name });
+  handleEditedMessage({ recipientPublicId, ...data }: MessageEditedPayload) {
+    this.emitToUsers<MessageEditedEventData>([recipientPublicId, data.editorPublicId], 'message:edited', data);
 
-    this.server.to(`user:${payload.recipientPublicId}`).emit('message:edited', {
-      messageId: payload.messageId,
-      dmKey: payload.dmKey,
-      editorPublicId: payload.editorPublicId,
-      editedAt: payload.editedAt,
-    });
+    appLogger.debug(`Emitting message edited event for ${recipientPublicId}`, { context: 'EventsGateway' });
   }
 
   @OnEvent('message.deleted')
-  handleDeletedMessage(payload: {
-    messageId: string;
-    dmKey: string;
-    deletedByPublicId: string;
-    recipientPublicId: string;
-    deletedAt: Date;
-  }) {
-    appLogger.debug(`Emitting message deleted event for ${payload.recipientPublicId}`, { context: EventsGateway.name });
+  handleDeletedMessage({ recipientPublicId, ...data }: MessageDeletedPayload) {
+    this.emitToUsers<MessageDeletedEventData>([recipientPublicId, data.deletedByPublicId], 'message:deleted', data);
 
-    this.server.to(`user:${payload.recipientPublicId}`).emit('message:deleted', {
-      messageId: payload.messageId,
-      dmKey: payload.dmKey,
-      deletedByPublicId: payload.deletedByPublicId,
-      deletedAt: payload.deletedAt,
-    });
+    appLogger.debug(`Emitting message deleted event for ${recipientPublicId}`, { context: 'EventsGateway' });
   }
 
   @OnEvent('message.seen')
-  handleMessageSeen(payload: {
-    messageId: string;
-    dmKey: string;
-    seenByPublicId: string;
-    recipientPublicId: string;
-    readAt: Date;
-  }) {
-    appLogger.debug(`Emitting message seen event for ${payload.recipientPublicId}`, { context: EventsGateway.name });
+  handleMessageSeen({ recipientPublicId, ...data }: MessageSeenPayload) {
+    this.emitToUsers<MessageSeenEventData>([recipientPublicId, data.seenByPublicId], 'message:seen', data);
 
-    this.server.to(`user:${payload.recipientPublicId}`).emit('message:seen', {
-      messageId: payload.messageId,
-      dmKey: payload.dmKey,
-      seenByPublicId: payload.seenByPublicId,
-      readAt: payload.readAt,
-    });
+    appLogger.debug(`Emitting message seen event for ${recipientPublicId}`, { context: 'EventsGateway' });
   }
 
   @OnEvent('message.seen.all')
-  handleMessageSeenAll(payload: { dmKey: string; seenAllByPublicId: string; recipientPublicId: string; readAt: Date }) {
-    appLogger.debug(`Emitting message seen all event for ${payload.recipientPublicId}`, {
-      context: EventsGateway.name,
-    });
+  handleMessageSeenAll({ recipientPublicId, ...data }: MessageSeenAllPayload) {
+    this.emitToUsers<MessageSeenAllEventData>([recipientPublicId, data.seenAllByPublicId], 'message:seen-all', data);
 
-    this.server.to(`user:${payload.recipientPublicId}`).emit('message:seen-all', {
-      dmKey: payload.dmKey,
-      seenAllByPublicId: payload.seenAllByPublicId,
-      readAt: payload.readAt,
-    });
+    appLogger.debug(`Emitting message seen all event for ${recipientPublicId}`, { context: 'EventsGateway' });
   }
 
   @OnEvent('typing.start')
-  handleTypingStart(payload: { dmKey: string; userPublicId: string; recipientPublicId: string }) {
-    appLogger.debug(`${payload.userPublicId} is typing to ${payload.recipientPublicId}`, {
-      context: EventsGateway.name,
-    });
+  handleTypingStart({ recipientPublicId, ...data }: TypingStartPayload) {
+    appLogger.debug(`${data.userPublicId} is typing to ${recipientPublicId}`, { context: 'EventsGateway' });
 
-    this.server.to(`user:${payload.recipientPublicId}`).emit('typing:start', {
-      dmKey: payload.dmKey,
-      userPublicId: payload.userPublicId,
-    });
+    this.emitToUser<TypingStartEventData>(recipientPublicId, 'typing:start', data);
   }
 
   @OnEvent('user.status')
-  handleUserStatus(payload: { publicId: string; status: 'ONLINE' | 'OFFLINE'; lastActiveAt: Date }) {
-    appLogger.debug(`User ${payload.publicId} status: ${payload.status}`, { context: EventsGateway.name });
+  handleUserStatus(payload: UserStatusPayload) {
+    appLogger.debug(`User ${payload.publicId} status: ${payload.status}`, { context: 'EventsGateway' });
 
-    this.server.emit('user:status', {
-      publicId: payload.publicId,
-      status: payload.status,
-      lastActiveAt: payload.lastActiveAt,
-    });
+    this.server.emit('user:status', payload);
   }
 
   @OnEvent('user.profile.updated')
-  handleProfileUpdated(payload: { publicId: string; updatedFields: string[] }) {
+  handleProfileUpdated(payload: UserProfileUpdatedPayload) {
     appLogger.debug(`User ${payload.publicId} updated profile: ${payload.updatedFields.join(', ')}`, {
-      context: EventsGateway.name,
+      context: 'EventsGateway',
     });
 
-    this.server.emit('user:profile-updated', {
-      publicId: payload.publicId,
-      updatedFields: payload.updatedFields,
-    });
+    this.server.emit('user:profile-updated', payload);
   }
 
-  private extractTokenFromHandshake(client: Socket): string | null {
-    const authHeader = client.handshake.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      return authHeader.substring(7);
+  private extractTokenFromHandshake(client: Socket): string | undefined {
+    const auth = client.handshake.auth;
+    if (auth?.token && typeof auth.token === 'string') {
+      return auth.token;
     }
 
-    return null;
+    const queryToken = client.handshake.query?.token;
+    if (typeof queryToken === 'string') {
+      return queryToken;
+    }
+
+    const authHeader = client.handshake.headers.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+      return authHeader.substring(7);
+    }
   }
 
   private async verifyToken(token: string) {
@@ -262,9 +225,18 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return payload;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      appLogger.error(`Token verification failed: ${errorMessage}`, { context: EventsGateway.name });
+      appLogger.error(`Token verification failed: ${errorMessage}`, { context: 'EventsGateway' });
       return null;
     }
+  }
+
+  private emitToUser<T>(publicId: string, event: string, data: T): void {
+    this.server.to(`user:${publicId}`).emit(event, data);
+  }
+
+  private emitToUsers<T>(publicIds: string[], event: string, data: T): void {
+    const rooms = publicIds.map((id) => `user:${id}`);
+    this.server.to(rooms).emit(event, data);
   }
 
   getConnectedUsersCount(): number {

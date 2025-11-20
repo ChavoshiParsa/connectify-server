@@ -13,7 +13,6 @@ import { CookieOptions, Request, Response } from 'express';
 import { IS_PROD } from 'src/env';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
-import { JwtGuard } from './guards/jwt.guard';
 import { RefreshGuard } from './guards/refresh.guard';
 
 @Controller('api/v1/auth')
@@ -80,7 +79,7 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(200)
-  @UseGuards(JwtGuard)
+  @UseGuards(RefreshGuard)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const userId = req.user?.userId;
     const deviceId = req.user?.deviceId;

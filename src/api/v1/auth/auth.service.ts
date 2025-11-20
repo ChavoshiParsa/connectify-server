@@ -6,7 +6,7 @@ import { AvatarColor } from 'generated/prisma/enums';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
-import { ValidateResponse } from './types/validate-response';
+import type { ValidateResponse } from './types';
 
 @Injectable()
 export class AuthService {
