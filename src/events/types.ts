@@ -35,15 +35,15 @@ export type MessageDeletedPayload = {
 
 export type MessageDeletedEventData = Omit<MessageDeletedPayload, 'recipientPublicId'>;
 
-export type MessageSeenPayload = {
-  messageId: string;
+export type MessagesSeenPayload = {
+  messageIds: string[];
   dmKey: string;
   seenByPublicId: string;
   recipientPublicId: string;
   readAt: Date;
 };
 
-export type MessageSeenEventData = Omit<MessageSeenPayload, 'recipientPublicId'>;
+export type MessagesSeenEventData = Omit<MessagesSeenPayload, 'recipientPublicId'>;
 
 export type MessageSeenAllPayload = {
   dmKey: string;

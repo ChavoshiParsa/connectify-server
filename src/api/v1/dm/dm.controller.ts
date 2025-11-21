@@ -15,7 +15,7 @@ import {
 import { Request } from 'express';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { DmService } from './dm.service';
-import { DmKeyDto, GetRoomMessagesDto, MessageDto } from './dto';
+import { DmKeyDto, GetRoomMessagesDto, MessageDto, SeenMessagesDto } from './dto';
 
 @Controller('api/v1/dm')
 @UseGuards(JwtGuard)
@@ -79,13 +79,22 @@ export class DmController {
     return this.dmService.setTyping(userId, recipientPublicId);
   }
 
+  @Post('seen-messages')
+  @HttpCode(200)
+  async seenMessages(@Req() req: Request, @Body() dto: SeenMessagesDto) {
+    const userId = req.user?.userId;
+    if (!userId) throw new ForbiddenException('Access denied');
+
+    return this.dmService.seenMessages(userId, dto.messageIds);
+  }
+
   @Post('seen-message/:messageId')
   @HttpCode(200)
   async seenMessage(@Req() req: Request, @Param('messageId') messageId: string) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    return this.dmService.seenMessage(userId, messageId);
+    return this.dmService.seenMessages(userId, [messageId]);
   }
 
   @Post('seen-all-messages/:dmKey')

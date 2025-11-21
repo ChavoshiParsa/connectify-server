@@ -352,11 +352,20 @@ export class DmService {
     };
   }
 
-  async seenMessage(userId: string, messageId: string) {
+  async seenMessages(userId: string, messageIds: string[]) {
+    const uniqueMessageIds = [...new Set(messageIds)].filter(Boolean);
+
+    if (uniqueMessageIds.length === 0) {
+      return { success: true, updated: [] };
+    }
+
     const result = await this.prisma.$transaction(async (tx) => {
-      const message = await tx.message.findUnique({
-        where: { id: messageId },
+      const messages = await tx.message.findMany({
+        where: {
+          id: { in: uniqueMessageIds },
+        },
         select: {
+          id: true,
           roomId: true,
           senderId: true,
           sender: {
@@ -370,74 +379,91 @@ export class DmService {
         },
       });
 
-      if (!message) {
-        throw new NotFoundException('Message not found.');
+      if (messages.length === 0) {
+        return { updated: [], errors: [] };
       }
 
-      if (message.senderId === userId) {
-        throw new BadRequestException('You cannot mark your own messages as read.');
+      const validMessages = messages.filter((msg) => msg.senderId !== userId);
+
+      if (validMessages.length === 0) {
+        return { updated: [], errors: [] };
       }
 
-      const receipt = await tx.messageReceipt.findUnique({
+      const validMessageIds = validMessages.map((msg) => msg.id);
+
+      const receipts = await tx.messageReceipt.findMany({
         where: {
-          messageId_userId: { messageId, userId },
+          messageId: { in: validMessageIds },
+          userId,
         },
-        select: { readAt: true },
+        select: {
+          messageId: true,
+          readAt: true,
+        },
       });
 
-      if (!receipt) {
-        throw new NotFoundException('Message receipt not found. You may not have access to this message.');
-      }
+      const unreadReceipts = receipts.filter((r) => !r.readAt);
+      const unreadMessageIds = unreadReceipts.map((r) => r.messageId);
 
-      if (receipt.readAt) {
-        return { alreadyRead: true };
+      if (unreadMessageIds.length === 0) {
+        return { updated: [], errors: [] };
       }
 
       const readAt = new Date();
 
-      await tx.messageReceipt.update({
+      await tx.messageReceipt.updateMany({
         where: {
-          messageId_userId: { messageId, userId },
+          messageId: { in: unreadMessageIds },
+          userId,
+          readAt: { isSet: false },
         },
         data: { readAt },
       });
 
+      const roomIds = [...new Set(validMessages.map((m) => m.roomId))];
+
       await tx.roomMember.updateMany({
         where: {
-          roomId: message.roomId,
+          roomId: { in: roomIds },
           userId,
           unreadCount: { gt: 0 },
         },
         data: {
-          unreadCount: { decrement: 1 },
+          unreadCount: {
+            decrement: unreadMessageIds.length,
+          },
         },
       });
 
-      return {
-        alreadyRead: false,
-        readAt,
-        publicId: message.sender.publicId,
-        dm: message.room.dmKey,
-      };
+      const updated = unreadMessageIds.map((msgId) => {
+        const message = validMessages.find((m) => m.id === msgId);
+        return {
+          messageId: msgId,
+          readAt,
+          publicId: message?.sender.publicId,
+          dmKey: message?.room.dmKey,
+        };
+      });
+
+      return { updated, errors: [] };
     });
 
-    if (!result.alreadyRead) {
-      const senderPublicId = result.publicId as string;
-      const seenByPublicId = this.getPartnerPublicKey(senderPublicId, result.dm as string);
+    const first = result.updated[0];
 
-      this.eventEmitter.emit('message.seen', {
-        messageId,
-        dmKey: result.dm as string,
-        seenByPublicId,
-        recipientPublicId: senderPublicId,
-        readAt: result.readAt,
-      });
-    }
+    const seenByPublicId = this.getPartnerPublicKey(first.publicId as string, first.dmKey as string);
+
+    this.eventEmitter.emit('messages.seen', {
+      messageIds: result.updated.map((u) => u.messageId),
+      dmKey: first.dmKey,
+      seenByPublicId,
+      recipientPublicId: first.publicId,
+      readAt: first.readAt,
+    });
 
     return {
       success: true,
-      messageId,
-      alreadyRead: result.alreadyRead,
+      updated: result.updated.map((u) => u.messageId),
+      count: result.updated.length,
     };
   }
 
@@ -575,6 +601,7 @@ export class DmService {
       select: {
         firstName: true,
         lastName: true,
+        publicId: true,
       },
     },
     receipts: {

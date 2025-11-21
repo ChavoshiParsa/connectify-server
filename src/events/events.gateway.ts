@@ -24,8 +24,8 @@ import type {
   MessageNewPayload,
   MessageSeenAllEventData,
   MessageSeenAllPayload,
-  MessageSeenEventData,
-  MessageSeenPayload,
+  MessagesSeenEventData,
+  MessagesSeenPayload,
   TypingStartEventData,
   TypingStartPayload,
   UserProfileUpdatedPayload,
@@ -162,9 +162,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     appLogger.debug(`Emitting message deleted event for ${recipientPublicId}`, { context: 'EventsGateway' });
   }
 
-  @OnEvent('message.seen')
-  handleMessageSeen({ recipientPublicId, ...data }: MessageSeenPayload) {
-    this.emitToUsers<MessageSeenEventData>([recipientPublicId, data.seenByPublicId], 'message:seen', data);
+  @OnEvent('messages.seen')
+  handleMessageSeen({ recipientPublicId, ...data }: MessagesSeenPayload) {
+    this.emitToUsers<MessagesSeenEventData>([recipientPublicId, data.seenByPublicId], 'messages:seen', data);
 
     appLogger.debug(`Emitting message seen event for ${recipientPublicId}`, { context: 'EventsGateway' });
   }

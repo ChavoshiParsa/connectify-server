@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsInt,
   IsISO8601,
   IsNotEmpty,
@@ -51,4 +52,9 @@ export class DmKeyDto {
     const [userA, userB] = parts;
     return [userA, userB].sort().join('~');
   }
+}
+
+export class SeenMessagesDto {
+  @IsArray()
+  messageIds: string[];
 }
