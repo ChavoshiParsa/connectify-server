@@ -32,6 +32,6 @@ export class UsersController {
     if (!userId) throw new ForbiddenException('Access denied');
 
     const results = await this.usersService.searchUsers(userId, q ?? '', 3);
-    return { results };
+    return results;
   }
 }

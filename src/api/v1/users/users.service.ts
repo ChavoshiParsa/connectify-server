@@ -1,11 +1,16 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AvatarColor, UserStatus } from 'generated/prisma/client';
 import slugify from 'slugify';
+import { UserStatusPayload } from 'src/events/types';
 import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private eventEmitter: EventEmitter2,
+  ) {}
 
   async getMe(id: string) {
     return this.prisma.user.findUnique({
@@ -102,15 +107,38 @@ export class UsersService {
   async updateLastLogin(id: string) {
     return this.prisma.user.update({
       where: { id },
-      data: { lastLoginAt: new Date(), lastActiveAt: new Date(), status: UserStatus.ONLINE },
+      data: { lastLoginAt: new Date() },
     });
   }
 
-  async updateLastActivity(id: string, status?: UserStatus) {
-    return this.prisma.user.update({
+  async updateLastActivity(id: string, status: UserStatus, shouldEmit = true) {
+    const now = new Date();
+
+    const user = await this.prisma.user.update({
       where: { id },
-      data: { lastActiveAt: new Date(), status: status ?? UserStatus.ONLINE },
+      data: {
+        lastActiveAt: now,
+        status,
+      },
+      select: {
+        id: true,
+        publicId: true,
+        status: true,
+        lastActiveAt: true,
+      },
     });
+
+    if (shouldEmit) {
+      const payload: UserStatusPayload = {
+        publicId: user.publicId,
+        status: user.status,
+        lastActiveAt: user.lastActiveAt as Date,
+      };
+
+      this.eventEmitter.emit('user.status', payload);
+    }
+
+    return user;
   }
 
   private async generateUniqueUsername(seedA?: string, seedB?: string) {

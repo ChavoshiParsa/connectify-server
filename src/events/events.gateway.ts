@@ -10,6 +10,7 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
+import { UserStatus } from 'generated/prisma/enums';
 import { Server, Socket } from 'socket.io';
 import type { JwtPayload } from 'src/api/v1/auth/types';
 import { UsersService } from 'src/api/v1/users/users.service';
@@ -59,21 +60,27 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     try {
       const token = this.extractTokenFromHandshake(client);
       if (!token) {
-        appLogger.warn(`Client ${client.id} connection rejected: No token provided`, { context: 'EventsGateway' });
+        appLogger.warn(`Client ${client.id} connection rejected: No token provided`, {
+          context: 'EventsGateway',
+        });
         client.disconnect();
         return;
       }
 
       const payload = await this.verifyToken(token);
       if (!payload) {
-        appLogger.warn(`Client ${client.id} connection rejected: Invalid token`, { context: 'EventsGateway' });
+        appLogger.warn(`Client ${client.id} connection rejected: Invalid token`, {
+          context: 'EventsGateway',
+        });
         client.disconnect();
         return;
       }
 
       const user = await this.usersService.findById(payload.sub);
       if (!user) {
-        appLogger.warn(`Client ${client.id} connection rejected: User not found`, { context: 'EventsGateway' });
+        appLogger.warn(`Client ${client.id} connection rejected: User not found`, {
+          context: 'EventsGateway',
+        });
         client.disconnect();
         return;
       }
@@ -88,20 +95,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
       await client.join(`user:${user.publicId}`);
 
-      appLogger.info(`Client ${client.id} connected as (user ${user.publicId})`, { context: 'EventsGateway' });
+      appLogger.info(`Client ${client.id} connected as (user ${user.publicId})`, {
+        context: 'EventsGateway',
+      });
 
-      await this.usersService.updateLastActivity(user.id);
-
-      const statusPayload: UserStatusPayload = {
-        publicId: user.publicId,
-        status: 'ONLINE',
-        lastActiveAt: new Date(),
-      };
-
-      client.broadcast.emit('user:status', statusPayload);
+      await this.usersService.updateLastActivity(user.id, UserStatus.ONLINE);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      appLogger.error(`Error handling connection: ${errorMessage}`, { context: 'EventsGateway' });
+      appLogger.error(`Error handling connection: ${errorMessage}`, {
+        context: 'EventsGateway',
+      });
       client.disconnect();
     }
 
@@ -109,9 +112,15 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   async handleDisconnect(client: AuthenticatedSocket) {
-    if (!client.userId) return;
+    if (!client.userId) {
+      appLogger.warn(`Client ${client.id} disconnected without userId`, {
+        context: 'EventsGateway',
+      });
+      return;
+    }
 
     const userSocketSet = this.userSockets.get(client.userId);
+
     if (userSocketSet) {
       userSocketSet.delete(client.id);
 
@@ -120,19 +129,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       if (isLastSession) {
         this.userSockets.delete(client.userId);
 
-        const statusPayload: UserStatusPayload = {
-          publicId: client.publicId!,
-          status: 'OFFLINE',
-          lastActiveAt: new Date(),
-        };
-
-        this.server.emit('user:status', statusPayload);
+        await this.usersService.updateLastActivity(client.userId, UserStatus.OFFLINE);
+      } else {
+        await this.usersService.updateLastActivity(client.userId, UserStatus.ONLINE);
       }
-
-      await this.usersService.updateLastActivity(client.userId, isLastSession ? 'OFFLINE' : undefined);
     }
 
-    appLogger.info(`Client ${client.id} disconnected (user: ${client.publicId})`, { context: 'EventsGateway' });
+    appLogger.info(`Client ${client.id} disconnected (user: ${client.publicId})`, {
+      context: 'EventsGateway',
+    });
+
     console.log('userSockets:', this.userSockets);
   }
 

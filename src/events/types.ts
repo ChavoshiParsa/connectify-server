@@ -1,3 +1,4 @@
+import { UserStatus } from 'generated/prisma/enums';
 import { Socket } from 'socket.io';
 
 export type AuthenticatedSocket = Socket & {
@@ -64,7 +65,7 @@ export type TypingStartEventData = Omit<TypingStartPayload, 'recipientPublicId'>
 
 export type UserStatusPayload = {
   publicId: string;
-  status: 'ONLINE' | 'OFFLINE';
+  status: UserStatus;
   lastActiveAt: Date;
 };
 

@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { RoomType } from 'generated/prisma/enums';
+import { RoomType, UserStatus } from 'generated/prisma/enums';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -11,8 +11,6 @@ export class DmService {
     private usersService: UsersService,
     private eventEmitter: EventEmitter2,
   ) {}
-
-  // APIs
 
   async getMyRooms(userId: string) {
     const roomMembers = await this.prisma.roomMember.findMany({
@@ -70,7 +68,19 @@ export class DmService {
     });
 
     if (!room) {
-      throw new NotFoundException('Room not found or access denied.');
+      // throw new NotFoundException('Room not found or access denied.');
+      const sender = await this.usersService.findById(userId);
+      const publicId = this.getPartnerPublicKey(sender!.publicId, dmKey) as string;
+
+      const recipient = await this.prisma.user.findUnique({ where: { publicId }, omit: this.safeUserSelect.omit });
+
+      return {
+        dmKey,
+        updatedAt: null,
+        lastMessage: null,
+        members: [],
+        recipient,
+      };
     }
 
     const recipient = room.members[0]?.user;
@@ -101,7 +111,13 @@ export class DmService {
     });
 
     if (!room) {
-      throw new NotFoundException('Room not found or access denied.');
+      // throw new NotFoundException('Room not found or access denied.');
+
+      return {
+        messages: [],
+        nextCursor: null,
+        hasMore: false,
+      };
     }
 
     const cursorDate = cursor ? (cursor instanceof Date ? cursor : new Date(cursor)) : new Date();
@@ -234,7 +250,7 @@ export class DmService {
       }
     });
 
-    await this.usersService.updateLastActivity(sender.id);
+    await this.usersService.updateLastActivity(sender.id, UserStatus.ONLINE, false);
 
     this.eventEmitter.emit('message.new', {
       messageId: message.id,
@@ -568,8 +584,6 @@ export class DmService {
       recipientPublicId,
     };
   }
-
-  // Helpers
 
   private makeDmKey(a: string, b: string): string {
     return [a, b].sort().join('~');

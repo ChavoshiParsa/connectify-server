@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/
 import { ConfigService } from '@nestjs/config';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
-import { AvatarColor } from 'generated/prisma/enums';
+import { AvatarColor, UserStatus } from 'generated/prisma/enums';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
@@ -98,6 +98,7 @@ export class AuthService {
         : await this.updateSession(existingSession.id, tokens.refreshToken, deviceId, userAgent, ip);
 
     await this.usersService.updateLastLogin(user.id);
+    await this.usersService.updateLastActivity(user.id, UserStatus.ONLINE);
 
     return {
       ...tokens,
@@ -136,6 +137,8 @@ export class AuthService {
         where: { id: matchingSession.id },
       });
     }
+
+    await this.usersService.updateLastActivity(userId, UserStatus.OFFLINE);
   }
 
   private async generateTokens(userId: string, email: string, deviceId: string) {
