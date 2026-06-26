@@ -157,4 +157,27 @@ export class UsersService {
       candidate = `${base}${i}`;
     }
   }
+
+  async isUsernameAvailable(username: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { username },
+      select: { publicId: true },
+    });
+
+    return !user;
+  }
+
+  getRandomAvatarColor(): AvatarColor {
+    const colors = Object.values(AvatarColor);
+    const randomIndex = Math.floor(Math.random() * colors.length);
+    return colors[randomIndex];
+  }
+
+  base64DataUrlBytes(dataUrl: string): number {
+    const idx = dataUrl.indexOf('base64,');
+    if (idx === -1) return 0;
+    const base64 = dataUrl.substring(idx + 'base64,'.length);
+    const padding = (base64.match(/=+$/) || [''])[0].length;
+    return Math.floor((base64.length * 3) / 4) - padding;
+  }
 }

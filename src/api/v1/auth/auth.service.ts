@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/
 import { ConfigService } from '@nestjs/config';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
-import { AvatarColor, UserStatus } from 'generated/prisma/enums';
+import { UserStatus } from 'generated/prisma/enums';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
@@ -18,7 +18,7 @@ export class AuthService {
   ) {}
 
   async validateEmailPass(dto: ValidateDto): Promise<ValidateResponse> {
-    const email = dto.email.trim().toLowerCase();
+    const email = dto.email;
     const existing = await this.usersService.findByEmail(email);
 
     const issues: ValidateResponse['password']['issues'] = [];
@@ -43,13 +43,13 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto, userAgent: string, ip: string) {
-    const existingEmail = await this.usersService.findByEmail(dto.email.trim().toLowerCase());
+    const existingEmail = await this.usersService.findByEmail(dto.email);
     if (existingEmail) {
       throw new BadRequestException('Email already in use');
     }
 
     if (dto.avatarBase64) {
-      const bytes = this.base64DataUrlBytes(dto.avatarBase64);
+      const bytes = this.usersService.base64DataUrlBytes(dto.avatarBase64);
       const MAX = 55 * 1024;
       if (bytes > MAX) {
         throw new BadRequestException('Avatar image too large');
@@ -59,9 +59,9 @@ export class AuthService {
     const passwordHash = await argon2.hash(dto.password);
     const user = await this.usersService.createUser({
       firstName: dto.firstName,
-      email: dto.email.trim().toLowerCase(),
+      email: dto.email,
       passwordHash,
-      avatarColor: this.getRandomAvatarColor(),
+      avatarColor: this.usersService.getRandomAvatarColor(),
       avatarUrl: dto.avatarBase64 ?? undefined,
     });
 
@@ -191,19 +191,5 @@ export class AuthService {
         expiresAt,
       },
     });
-  }
-
-  private getRandomAvatarColor(): AvatarColor {
-    const colors = Object.values(AvatarColor);
-    const randomIndex = Math.floor(Math.random() * colors.length);
-    return colors[randomIndex];
-  }
-
-  private base64DataUrlBytes(dataUrl: string): number {
-    const idx = dataUrl.indexOf('base64,');
-    if (idx === -1) return 0;
-    const base64 = dataUrl.substring(idx + 'base64,'.length);
-    const padding = (base64.match(/=+$/) || [''])[0].length;
-    return Math.floor((base64.length * 3) / 4) - padding;
   }
 }
