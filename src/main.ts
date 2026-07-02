@@ -1,9 +1,11 @@
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module';
+import { MAX_MESSAGE_IMAGE_BYTES } from './message-media/message-media.constants';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { NODE_ENV } from './env';
 import { NestPinoLogger } from './logger/nest-pino.service';
@@ -26,6 +28,13 @@ async function bootstrap() {
   await app.register(fastifyCookie, {
     secret: configService.get<string>('COOKIE_SECRET') || configService.get<string>('JWT_REFRESH_SECRET'),
     hook: 'onRequest',
+  });
+
+  await app.register(fastifyMultipart, {
+    limits: {
+      files: 1,
+      fileSize: MAX_MESSAGE_IMAGE_BYTES,
+    },
   });
 
   app.useGlobalPipes(

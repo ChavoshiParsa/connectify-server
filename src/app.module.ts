@@ -8,6 +8,8 @@ import { ProfileModule } from './api/v1/profile/profile.module';
 import { UsersModule } from './api/v1/users/users.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AvatarModule } from './avatar/avatar.module';
+import { MessageMediaModule } from './message-media/message-media.module';
 import { RequestLoggerInterceptor } from './common/interceptors/request-logger.interceptor';
 import { EventsModule } from './events/events.module';
 import { NestPinoLogger } from './logger/nest-pino.service';
@@ -17,6 +19,8 @@ import { PrismaModule } from './prisma/prisma.module';
   imports: [
     PrismaModule,
     ConfigModule.forRoot({ isGlobal: true }),
+    AvatarModule,
+    MessageMediaModule,
     EventEmitterModule.forRoot(),
     AuthModule,
     UsersModule,

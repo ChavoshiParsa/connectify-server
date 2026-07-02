@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, Length, Matches } from 'class-validator';
 
 export class CheckUsernameDto {
   @IsString()
@@ -41,11 +41,4 @@ export class UpdateProfileDto {
   @Transform(({ value }: { value?: string }) => value?.trim())
   @Length(1, 128)
   biography?: string;
-}
-
-export class UpdateAvatarDto {
-  @IsString()
-  @MaxLength(2000000)
-  @Matches(/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/)
-  avatarBase64!: string;
 }

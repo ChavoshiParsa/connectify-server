@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { UserStatus } from 'generated/prisma/enums';
+import { AvatarStorageService } from 'src/avatar/avatar-storage.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
@@ -15,6 +16,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private prisma: PrismaService,
+    private avatarStorage: AvatarStorageService,
   ) {}
 
   async validateEmailPass(dto: ValidateDto): Promise<ValidateResponse> {
@@ -48,22 +50,26 @@ export class AuthService {
       throw new BadRequestException('Email already in use');
     }
 
+    const passwordHash = await argon2.hash(dto.password);
+    let avatarUrl: string | undefined;
     if (dto.avatarBase64) {
-      const bytes = this.usersService.base64DataUrlBytes(dto.avatarBase64);
-      const MAX = 55 * 1024;
-      if (bytes > MAX) {
-        throw new BadRequestException('Avatar image too large');
-      }
+      const avatar = this.avatarStorage.decodeDataUrl(dto.avatarBase64);
+      avatarUrl = await this.avatarStorage.upload(avatar.buffer, avatar.contentType, dto.email);
     }
 
-    const passwordHash = await argon2.hash(dto.password);
-    const user = await this.usersService.createUser({
-      firstName: dto.firstName,
-      email: dto.email,
-      passwordHash,
-      avatarColor: this.usersService.getRandomAvatarColor(),
-      avatarUrl: dto.avatarBase64 ?? undefined,
-    });
+    const user = await this.usersService
+      .createUser({
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        passwordHash,
+        avatarColor: this.usersService.getRandomAvatarColor(),
+        avatarUrl,
+      })
+      .catch(async (error: unknown) => {
+        await this.avatarStorage.deleteByUrl(avatarUrl);
+        throw error;
+      });
 
     const deviceId = dto?.deviceId || crypto.randomUUID();
     const tokens = await this.generateTokens(user.id, user.email, deviceId);
