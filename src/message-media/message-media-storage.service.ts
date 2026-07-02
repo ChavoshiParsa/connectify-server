@@ -107,7 +107,11 @@ export class MessageMediaStorageService implements OnModuleInit, OnModuleDestroy
 
   private safeFileName(originalFileName: string, mimeType: string): string {
     const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.split('/')[1];
-    const baseName = originalFileName.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'image';
+    const baseName =
+      originalFileName
+        .replace(/\.[^.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .slice(0, 80) || 'image';
     return `${baseName}.${extension}`;
   }
 
@@ -116,4 +120,3 @@ export class MessageMediaStorageService implements OnModuleInit, OnModuleDestroy
     return this.bucket;
   }
 }
-

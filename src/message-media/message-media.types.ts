@@ -5,4 +5,3 @@ export type ImageMessageAttachment = {
   mimeType: string;
   size: number;
 };
-

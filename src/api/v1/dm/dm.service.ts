@@ -1,6 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Prisma } from 'generated/prisma/client';
 import { RoomType, UserStatus } from 'generated/prisma/enums';
+import { MessageMediaStorageService } from 'src/message-media/message-media-storage.service';
+import type { ImageMessageAttachment } from 'src/message-media/message-media.types';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -10,6 +13,7 @@ export class DmService {
     private prisma: PrismaService,
     private usersService: UsersService,
     private eventEmitter: EventEmitter2,
+    private messageMediaStorage: MessageMediaStorageService,
   ) {}
 
   async getMyRooms(userId: string) {
@@ -171,7 +175,27 @@ export class DmService {
     return message;
   }
 
-  async sendMessage(userId: string, recipientPublicId: string, content: string) {
+  async sendImageMessage(
+    userId: string,
+    recipientPublicId: string,
+    content: string,
+    image: { buffer: Buffer; mimeType: string; fileName: string },
+  ) {
+    const sender = await this.usersService.findById(userId);
+    const recipient = await this.usersService.findByPublicId(recipientPublicId);
+    if (!sender || !recipient) throw new NotFoundException('Invalid sender or recipient.');
+    if (sender.publicId === recipient.publicId) throw new BadRequestException('Cannot send message to yourself.');
+
+    const attachment = await this.messageMediaStorage.uploadImage(image.buffer, image.mimeType, image.fileName, userId);
+    return this.sendMessage(userId, recipientPublicId, content, [attachment]);
+  }
+
+  async sendMessage(
+    userId: string,
+    recipientPublicId: string,
+    content: string,
+    attachments?: ImageMessageAttachment[],
+  ) {
     const sender = await this.usersService.findById(userId);
     const recipient = await this.usersService.findByPublicId(recipientPublicId);
 
@@ -185,70 +209,79 @@ export class DmService {
 
     const dmKey = this.makeDmKey(sender.publicId, recipient.publicId);
 
-    const message = await this.prisma.$transaction(async (tx) => {
-      const existingRoom = await tx.room.findUnique({
-        where: { type_dmKey: { type: RoomType.DM, dmKey } },
-      });
-
-      if (existingRoom) {
-        const message = await tx.message.create({
-          data: {
-            roomId: existingRoom.id,
-            senderId: sender.id,
-            content,
-            receipts: { create: { userId: recipient.id } },
-          },
-          select: { id: true, content: true, createdAt: true },
+    const message = await this.prisma
+      .$transaction(async (tx) => {
+        const existingRoom = await tx.room.findUnique({
+          where: { type_dmKey: { type: RoomType.DM, dmKey } },
         });
 
-        await tx.roomMember.update({
-          where: {
-            roomId_userId: {
+        if (existingRoom) {
+          const message = await tx.message.create({
+            data: {
               roomId: existingRoom.id,
-              userId: recipient.id,
+              senderId: sender.id,
+              content,
+              attachments: attachments?.length ? (attachments as Prisma.InputJsonValue) : undefined,
+              receipts: { create: { userId: recipient.id } },
             },
-          },
-          data: {
-            unreadCount: { increment: 1 },
-          },
-        });
+            select: { id: true, content: true, attachments: true, createdAt: true },
+          });
 
-        await tx.room.update({
-          where: { id: existingRoom.id },
-          data: { lastMessageId: message.id },
-        });
-
-        return message;
-      } else {
-        const newRoom = await tx.room.create({
-          data: {
-            type: RoomType.DM,
-            dmKey,
-            members: {
-              create: [{ userId: sender.id }, { userId: recipient.id, unreadCount: 1 }],
+          await tx.roomMember.update({
+            where: {
+              roomId_userId: {
+                roomId: existingRoom.id,
+                userId: recipient.id,
+              },
             },
-          },
-          select: { id: true },
-        });
+            data: {
+              unreadCount: { increment: 1 },
+            },
+          });
 
-        const newMessage = await tx.message.create({
-          data: {
-            roomId: newRoom.id,
-            senderId: sender.id,
-            content,
-            receipts: { create: { userId: recipient.id } },
-          },
-          select: { id: true, content: true, createdAt: true },
-        });
+          await tx.room.update({
+            where: { id: existingRoom.id },
+            data: { lastMessageId: message.id },
+          });
 
-        await tx.room.update({
-          where: { id: newRoom.id },
-          data: { lastMessageId: newMessage.id },
-        });
+          return message;
+        } else {
+          const newRoom = await tx.room.create({
+            data: {
+              type: RoomType.DM,
+              dmKey,
+              members: {
+                create: [{ userId: sender.id }, { userId: recipient.id, unreadCount: 1 }],
+              },
+            },
+            select: { id: true },
+          });
 
-        return newMessage;
-      }
-    });
+          const newMessage = await tx.message.create({
+            data: {
+              roomId: newRoom.id,
+              senderId: sender.id,
+              content,
+              attachments: attachments?.length ? (attachments as Prisma.InputJsonValue) : undefined,
+              receipts: { create: { userId: recipient.id } },
+            },
+            select: { id: true, content: true, attachments: true, createdAt: true },
+          });
+
+          await tx.room.update({
+            where: { id: newRoom.id },
+            data: { lastMessageId: newMessage.id },
+          });
+
+          return newMessage;
+        }
+      })
+      .catch(async (error: unknown) => {
+        await Promise.allSettled(
+          (attachments ?? []).map((attachment) => this.messageMediaStorage.delete(attachment.fileId)),
+        );
+        throw error;
+      });
 
     await this.usersService.updateLastActivity(sender.id, UserStatus.ONLINE, false);
 
@@ -263,9 +296,33 @@ export class DmService {
     return {
       messageId: message.id,
       content: message.content,
+      attachments: message.attachments,
       createdAt: message.createdAt,
       dmKey,
     };
+  }
+
+  async getMessageImage(userId: string, messageId: string, fileId: string) {
+    const message = await this.prisma.message.findFirst({
+      where: {
+        id: messageId,
+        deletedAt: { isSet: false },
+        room: { members: { some: { userId } } },
+      },
+      select: { attachments: true },
+    });
+
+    const attachment = this.getImageAttachments(message?.attachments).find((item) => item.fileId === fileId);
+    if (!attachment) throw new NotFoundException('Message image not found.');
+
+    const file = await this.messageMediaStorage.find(fileId);
+    if (!file) throw new NotFoundException('Message image not found.');
+
+    return { file, attachment };
+  }
+
+  openMessageImage(fileId: string) {
+    return this.messageMediaStorage.openDownloadStream(fileId);
   }
 
   async editMessage(userId: string, messageId: string, content: string) {
@@ -350,6 +407,12 @@ export class DmService {
         },
       },
     });
+
+    await Promise.allSettled(
+      this.getImageAttachments(existingMessage.attachments).map((attachment) =>
+        this.messageMediaStorage.delete(attachment.fileId),
+      ),
+    );
 
     const recipientPublicId = this.getPartnerPublicKey(message.sender.publicId, message.room.dmKey as string);
 
@@ -609,6 +672,7 @@ export class DmService {
   private readonly lastMessageSelect = {
     id: true,
     content: true,
+    attachments: true,
     createdAt: true,
     editedAt: true,
     sender: {
@@ -629,6 +693,7 @@ export class DmService {
     return {
       id: true,
       content: true,
+      attachments: true,
       createdAt: true,
       editedAt: true,
       sender: this.safeUserSelect,
@@ -669,5 +734,20 @@ export class DmService {
         },
       },
     } as const;
+  }
+
+  private getImageAttachments(value: Prisma.JsonValue | null | undefined): ImageMessageAttachment[] {
+    if (!Array.isArray(value)) return [];
+
+    return value.filter((item): item is ImageMessageAttachment => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      return (
+        item.type === 'IMAGE' &&
+        typeof item.fileId === 'string' &&
+        typeof item.fileName === 'string' &&
+        typeof item.mimeType === 'string' &&
+        typeof item.size === 'number'
+      );
+    });
   }
 }
