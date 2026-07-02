@@ -14,7 +14,7 @@ import { UserStatus } from 'generated/prisma/enums';
 import { Server, Socket } from 'socket.io';
 import type { JwtPayload } from 'src/api/v1/auth/types';
 import { UsersService } from 'src/api/v1/users/users.service';
-import { appLogger } from 'src/logger/winston.logger';
+import { appLogger } from 'src/logger/pino.logger';
 import type {
   AuthenticatedSocket,
   MessageDeletedEventData,
@@ -33,18 +33,25 @@ import type {
   UserStatusPayload,
 } from './types';
 
+const OFFLINE_GRACE_MS = 10_000;
+
 @Injectable()
 @WebSocketGateway({
   namespace: '/events',
   cors: {
-    origin: process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()) || [],
+    origin:
+      process.env.ALLOWED_ORIGINS?.split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean) || [],
+    credentials: true,
   },
 })
 export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
-  server: Server;
+  server!: Server;
 
   private readonly userSockets = new Map<string, Set<string>>();
+  private readonly offlineTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -53,93 +60,83 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   ) {}
 
   afterInit(_server: Server) {
-    appLogger.info('WebSocket Gateway initialized', { context: 'EventsGateway' });
+    appLogger.info('WebSocket gateway initialized', { context: 'EventsGateway' });
   }
 
   async handleConnection(client: AuthenticatedSocket) {
     try {
       const token = this.extractTokenFromHandshake(client);
       if (!token) {
-        appLogger.warn(`Client ${client.id} connection rejected: No token provided`, {
-          context: 'EventsGateway',
-        });
-        client.disconnect();
+        appLogger.warn(`Client ${client.id} connection rejected: no token`, { context: 'EventsGateway' });
+        client.disconnect(true);
         return;
       }
 
       const payload = await this.verifyToken(token);
       if (!payload) {
-        appLogger.warn(`Client ${client.id} connection rejected: Invalid token`, {
-          context: 'EventsGateway',
-        });
-        client.disconnect();
+        appLogger.warn(`Client ${client.id} connection rejected: invalid token`, { context: 'EventsGateway' });
+        client.disconnect(true);
         return;
       }
 
       const user = await this.usersService.findById(payload.sub);
       if (!user) {
-        appLogger.warn(`Client ${client.id} connection rejected: User not found`, {
-          context: 'EventsGateway',
-        });
-        client.disconnect();
+        appLogger.warn(`Client ${client.id} connection rejected: user not found`, { context: 'EventsGateway' });
+        client.disconnect(true);
         return;
       }
 
       client.userId = user.id;
       client.publicId = user.publicId;
 
-      if (!this.userSockets.has(user.id)) {
-        this.userSockets.set(user.id, new Set());
-      }
-      this.userSockets.get(user.id)!.add(client.id);
+      this.cancelOfflineTimer(user.id);
+      this.addUserSocket(user.id, client.id);
 
       await client.join(`user:${user.publicId}`);
-
-      appLogger.info(`Client ${client.id} connected as (user ${user.publicId})`, {
-        context: 'EventsGateway',
-      });
-
       await this.usersService.updateLastActivity(user.id, UserStatus.ONLINE);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      appLogger.error(`Error handling connection: ${errorMessage}`, {
-        context: 'EventsGateway',
-      });
-      client.disconnect();
-    }
 
-    console.log('userSockets:', this.userSockets);
+      appLogger.info(`Client connected`, {
+        context: 'EventsGateway',
+        socketId: client.id,
+        userId: user.id,
+        publicId: user.publicId,
+        activeSockets: this.getUserSocketCount(user.id),
+      });
+    } catch (error) {
+      appLogger.error('Error handling socket connection', {
+        context: 'EventsGateway',
+        socketId: client.id,
+        err: error instanceof Error ? error : undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      client.disconnect(true);
+    }
   }
 
   async handleDisconnect(client: AuthenticatedSocket) {
     if (!client.userId) {
-      appLogger.warn(`Client ${client.id} disconnected without userId`, {
+      appLogger.warn(`Client disconnected without userId`, {
         context: 'EventsGateway',
+        socketId: client.id,
       });
       return;
     }
 
-    const userSocketSet = this.userSockets.get(client.userId);
+    const remainingSockets = this.removeUserSocket(client.userId, client.id);
 
-    if (userSocketSet) {
-      userSocketSet.delete(client.id);
-
-      const isLastSession = userSocketSet.size === 0;
-
-      if (isLastSession) {
-        this.userSockets.delete(client.userId);
-
-        await this.usersService.updateLastActivity(client.userId, UserStatus.OFFLINE);
-      } else {
-        await this.usersService.updateLastActivity(client.userId, UserStatus.ONLINE);
-      }
+    if (remainingSockets === 0) {
+      this.scheduleOffline(client.userId);
+    } else {
+      await this.usersService.updateLastActivity(client.userId, UserStatus.ONLINE);
     }
 
-    appLogger.info(`Client ${client.id} disconnected (user: ${client.publicId})`, {
+    appLogger.info('Client disconnected', {
       context: 'EventsGateway',
+      socketId: client.id,
+      userId: client.userId,
+      publicId: client.publicId,
+      remainingSockets,
     });
-
-    console.log('userSockets:', this.userSockets);
   }
 
   @SubscribeMessage('ping')
@@ -151,55 +148,65 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   handleNewMessage({ recipientPublicId, ...data }: MessageNewPayload) {
     this.emitToUsers<MessageNewEventData>([recipientPublicId, data.senderPublicId], 'message:new', data);
 
-    appLogger.debug(`Emitting new message event to ${recipientPublicId}`, { context: 'EventsGateway' });
+    appLogger.debug(`Emitting new message event`, { context: 'EventsGateway', recipientPublicId });
   }
 
   @OnEvent('message.edited')
   handleEditedMessage({ recipientPublicId, ...data }: MessageEditedPayload) {
     this.emitToUsers<MessageEditedEventData>([recipientPublicId, data.editorPublicId], 'message:edited', data);
 
-    appLogger.debug(`Emitting message edited event for ${recipientPublicId}`, { context: 'EventsGateway' });
+    appLogger.debug(`Emitting message edited event`, { context: 'EventsGateway', recipientPublicId });
   }
 
   @OnEvent('message.deleted')
   handleDeletedMessage({ recipientPublicId, ...data }: MessageDeletedPayload) {
     this.emitToUsers<MessageDeletedEventData>([recipientPublicId, data.deletedByPublicId], 'message:deleted', data);
 
-    appLogger.debug(`Emitting message deleted event for ${recipientPublicId}`, { context: 'EventsGateway' });
+    appLogger.debug(`Emitting message deleted event`, { context: 'EventsGateway', recipientPublicId });
   }
 
   @OnEvent('messages.seen')
   handleMessageSeen({ recipientPublicId, ...data }: MessagesSeenPayload) {
     this.emitToUsers<MessagesSeenEventData>([recipientPublicId, data.seenByPublicId], 'messages:seen', data);
 
-    appLogger.debug(`Emitting message seen event for ${recipientPublicId}`, { context: 'EventsGateway' });
+    appLogger.debug(`Emitting messages seen event`, { context: 'EventsGateway', recipientPublicId });
   }
 
   @OnEvent('message.seen.all')
   handleMessageSeenAll({ recipientPublicId, ...data }: MessageSeenAllPayload) {
     this.emitToUsers<MessageSeenAllEventData>([recipientPublicId, data.seenAllByPublicId], 'message:seen-all', data);
 
-    appLogger.debug(`Emitting message seen all event for ${recipientPublicId}`, { context: 'EventsGateway' });
+    appLogger.debug(`Emitting message seen all event`, { context: 'EventsGateway', recipientPublicId });
   }
 
   @OnEvent('typing.start')
   handleTypingStart({ recipientPublicId, ...data }: TypingStartPayload) {
-    appLogger.debug(`${data.userPublicId} is typing to ${recipientPublicId}`, { context: 'EventsGateway' });
+    appLogger.debug('Emitting typing start event', {
+      context: 'EventsGateway',
+      userPublicId: data.userPublicId,
+      recipientPublicId,
+    });
 
     this.emitToUser<TypingStartEventData>(recipientPublicId, 'typing:start', data);
   }
 
   @OnEvent('user.status')
   handleUserStatus(payload: UserStatusPayload) {
-    appLogger.debug(`User ${payload.publicId} status: ${payload.status}`, { context: 'EventsGateway' });
+    appLogger.debug('Broadcasting user status', {
+      context: 'EventsGateway',
+      publicId: payload.publicId,
+      status: payload.status,
+    });
 
     this.server.emit('user:status', payload);
   }
 
   @OnEvent('user.profile.updated')
   handleProfileUpdated(payload: UserProfileUpdatedPayload) {
-    appLogger.debug(`User ${payload.publicId} updated profile: ${payload.updatedFields.join(', ')}`, {
+    appLogger.debug('Broadcasting profile update', {
       context: 'EventsGateway',
+      publicId: payload.publicId,
+      updatedFields: payload.updatedFields,
     });
 
     this.server.emit('user:profile-updated', payload);
@@ -230,8 +237,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
       return payload;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      appLogger.error(`Token verification failed: ${errorMessage}`, { context: 'EventsGateway' });
+      appLogger.warn('Socket token verification failed', {
+        context: 'EventsGateway',
+        err: error instanceof Error ? error : undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
@@ -243,6 +253,61 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   private emitToUsers<T>(publicIds: string[], event: string, data: T): void {
     const rooms = publicIds.map((id) => `user:${id}`);
     this.server.to(rooms).emit(event, data);
+  }
+
+  private addUserSocket(userId: string, socketId: string) {
+    const sockets = this.userSockets.get(userId) ?? new Set<string>();
+    sockets.add(socketId);
+    this.userSockets.set(userId, sockets);
+  }
+
+  private removeUserSocket(userId: string, socketId: string) {
+    const sockets = this.userSockets.get(userId);
+    if (!sockets) return 0;
+
+    sockets.delete(socketId);
+
+    if (sockets.size === 0) {
+      this.userSockets.delete(userId);
+      return 0;
+    }
+
+    return sockets.size;
+  }
+
+  private getUserSocketCount(userId: string) {
+    return this.userSockets.get(userId)?.size ?? 0;
+  }
+
+  private scheduleOffline(userId: string) {
+    this.cancelOfflineTimer(userId);
+
+    const timer = setTimeout(() => {
+      void this.markOfflineIfStillDisconnected(userId);
+    }, OFFLINE_GRACE_MS);
+
+    this.offlineTimers.set(userId, timer);
+  }
+
+  private cancelOfflineTimer(userId: string) {
+    const timer = this.offlineTimers.get(userId);
+    if (!timer) return;
+
+    clearTimeout(timer);
+    this.offlineTimers.delete(userId);
+  }
+
+  private async markOfflineIfStillDisconnected(userId: string) {
+    this.offlineTimers.delete(userId);
+
+    if (this.userSockets.has(userId)) return;
+
+    await this.usersService.updateLastActivity(userId, UserStatus.OFFLINE);
+
+    appLogger.info('User marked offline after disconnect grace period', {
+      context: 'EventsGateway',
+      userId,
+    });
   }
 
   getConnectedUsersCount(): number {

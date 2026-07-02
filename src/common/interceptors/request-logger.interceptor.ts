@@ -4,12 +4,10 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { CallHandler, ExecutionContext, HttpException, Injectable, NestInterceptor } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { Request, Response } from 'express';
 import { Observable, throwError } from 'rxjs';
 import { catchError, tap } from 'rxjs/operators';
-import { appLogger } from '../../logger/winston.logger';
-
-type ReqWithIdUser = Request & { id?: string; user?: any };
+import { appLogger } from '../../logger/pino.logger';
+import type { AppFastifyReply, AppFastifyRequest } from '../types/http';
 
 const PICK_HEADER_KEYS = [
   'user-agent',
@@ -29,8 +27,12 @@ const SENSITIVE_BODY_KEYS = new Set([
   'token',
   'access_token',
   'refresh_token',
+  'accessToken',
+  'refreshToken',
   'client_secret',
   'secret',
+  'hashedRt',
+  'passwordHash',
 ]);
 
 function sanitizeHeaders(headers: Record<string, any>) {
@@ -69,21 +71,21 @@ export class RequestLoggerInterceptor implements NestInterceptor {
     if (context.getType() !== 'http') return next.handle();
 
     const http = context.switchToHttp();
-    const req = http.getRequest<ReqWithIdUser>();
-    const res = http.getResponse<Response>();
+    const req = http.getRequest<AppFastifyRequest>();
+    const reply = http.getResponse<AppFastifyReply>();
 
-    const id = (req.headers['x-request-id'] as string) || randomUUID();
-    req.id = id;
-    res.setHeader('x-request-id', id);
+    const requestId = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'] : randomUUID();
+    req.id = requestId;
+    reply.header('x-request-id', requestId);
 
     const method = req.method;
-    const url = req.originalUrl || req.url;
+    const url = req.url;
     const start = process.hrtime.bigint();
 
     const metaBase: Record<string, any> = {
       context: 'HTTP',
-      requestId: id,
-      userId: (req.user && (req.user.id ?? req.user.sub)) || undefined,
+      requestId,
+      userId: (req.user && (req.user.id ?? req.user.sub ?? req.user.userId)) || undefined,
       ip: req.ip,
       headers: sanitizeHeaders(req.headers),
     };
@@ -96,23 +98,25 @@ export class RequestLoggerInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(() => {
-        const durMs = Number(process.hrtime.bigint() - start) / 1e6;
+        const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
 
-        appLogger.info(`← ${method} ${url} ${Math.round(durMs)}ms`, {
+        appLogger.info(`← ${method} ${url} ${Math.round(durationMs)}ms`, {
           ...metaBase,
-          status: res.statusCode,
-          contentLength: res.getHeader('content-length') ?? undefined,
+          status: reply.statusCode,
+          durationMs: Math.round(durationMs),
+          contentLength: reply.getHeader('content-length') ?? undefined,
         });
       }),
       catchError((err) => {
-        const durMs = Number(process.hrtime.bigint() - start) / 1e6;
+        const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
         const status = err instanceof HttpException ? err.getStatus() : 500;
 
-        appLogger.error(`✖ ${method} ${url} ${Math.round(durMs)}ms`, {
+        appLogger.error(`✖ ${method} ${url} ${Math.round(durationMs)}ms`, {
           ...metaBase,
           status,
+          durationMs: Math.round(durationMs),
           error: err instanceof HttpException ? err.getResponse() : (err?.message ?? String(err)),
-          stack: err?.stack,
+          err: err instanceof Error ? err : undefined,
         });
 
         return throwError(() => err);

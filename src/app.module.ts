@@ -10,11 +10,12 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { RequestLoggerInterceptor } from './common/interceptors/request-logger.interceptor';
 import { EventsModule } from './events/events.module';
-import { NestWinstonLogger } from './logger/nest-winston.service';
-import { PrismaService } from './prisma/prisma.service';
+import { NestPinoLogger } from './logger/nest-pino.service';
+import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
   imports: [
+    PrismaModule,
     ConfigModule.forRoot({ isGlobal: true }),
     EventEmitterModule.forRoot(),
     AuthModule,
@@ -26,13 +27,12 @@ import { PrismaService } from './prisma/prisma.service';
   controllers: [AppController],
   providers: [
     AppService,
-    PrismaService,
-    NestWinstonLogger,
+    NestPinoLogger,
     {
       provide: APP_INTERCEPTOR,
       useClass: RequestLoggerInterceptor,
     },
   ],
-  exports: [NestWinstonLogger],
+  exports: [NestPinoLogger],
 })
 export class AppModule {}

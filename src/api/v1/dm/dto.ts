@@ -19,7 +19,7 @@ export class MessageDto {
   @IsString()
   @MinLength(1)
   @MaxLength(5000)
-  content: string;
+  content!: string;
 }
 
 export class GetRoomMessagesDto {
@@ -41,7 +41,7 @@ export class DmKeyDto {
   @Matches(/^[a-zA-Z0-9_-]+~[a-zA-Z0-9_-]+$/, {
     message: 'DM key format must be "userA~userB"',
   })
-  dmKey: string;
+  dmKey!: string;
 
   static sortAndValidate(dmKey: string): string {
     const parts = dmKey.split('~');
@@ -56,5 +56,5 @@ export class DmKeyDto {
 
 export class SeenMessagesDto {
   @IsArray()
-  messageIds: string[];
+  messageIds!: string[];
 }

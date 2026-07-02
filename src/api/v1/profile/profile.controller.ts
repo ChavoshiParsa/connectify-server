@@ -1,5 +1,5 @@
 import { Body, Controller, ForbiddenException, Get, Patch, Query, Req, UseGuards } from '@nestjs/common';
-import { Request } from 'express';
+import type { AppFastifyRequest } from 'src/common/types/http';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { UsersService } from '../users/users.service';
 import { CheckUsernameDto, UpdateAvatarDto, UpdateProfileDto } from './dto';
@@ -20,7 +20,7 @@ export class ProfileController {
   }
 
   @Patch('update-profile')
-  async updateProfile(@Body() dto: UpdateProfileDto, @Req() req: Request) {
+  async updateProfile(@Body() dto: UpdateProfileDto, @Req() req: AppFastifyRequest) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
@@ -29,7 +29,7 @@ export class ProfileController {
   }
 
   @Patch('update-avatar')
-  async updateAvatar(@Body() dto: UpdateAvatarDto, @Req() req: Request) {
+  async updateAvatar(@Body() dto: UpdateAvatarDto, @Req() req: AppFastifyRequest) {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 

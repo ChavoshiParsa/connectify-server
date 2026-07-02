@@ -18,10 +18,10 @@ export const PasswordField = () =>
 
 export class ValidateDto {
   @EmailField()
-  email: string;
+  email!: string;
 
   @PasswordField()
-  password: string;
+  password!: string;
 }
 
 export class RegisterDto {
@@ -29,7 +29,7 @@ export class RegisterDto {
   @IsNotEmpty()
   @Transform(({ value }: { value?: string }) => value?.trim())
   @Length(1, 24)
-  firstName: string;
+  firstName!: string;
 
   @IsOptional()
   @IsString()
@@ -38,7 +38,7 @@ export class RegisterDto {
   lastName?: string;
 
   @EmailField()
-  email: string;
+  email!: string;
 
   // @IsString()
   // @Matches(/^[A-Za-z].*$/, { message: 'Username must start with a letter.' })
@@ -50,7 +50,7 @@ export class RegisterDto {
   //  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/, {
   //   message: 'Password must contain uppercase, lowercase, and a number',
   // })
-  password: string;
+  password!: string;
 
   @IsOptional()
   @IsString()
@@ -66,10 +66,10 @@ export class RegisterDto {
 
 export class LoginDto {
   @EmailField()
-  email: string;
+  email!: string;
 
   @PasswordField()
-  password: string;
+  password!: string;
 
   @IsOptional()
   @IsString()

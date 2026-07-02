@@ -9,7 +9,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { CookieOptions, Request, Response } from 'express';
+import { getClientIp, getUserAgent, type AppFastifyReply, type AppFastifyRequest } from 'src/common/types/http';
 import { IS_PROD } from 'src/env';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, ValidateDto } from './dto';
@@ -26,13 +26,13 @@ export class AuthController {
   }
 
   @Post('register')
-  async register(@Body() dto: RegisterDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const userAgent = req.headers['user-agent'] || 'unknown';
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      req.ip ||
-      'unknown';
+  async register(
+    @Body() dto: RegisterDto,
+    @Req() req: AppFastifyRequest,
+    @Res({ passthrough: true }) res: AppFastifyReply,
+  ) {
+    const userAgent = getUserAgent(req);
+    const ip = getClientIp(req);
 
     const { accessToken, refreshToken, deviceId, user } = await this.authService.register(dto, userAgent, ip);
     const { id: _id, passwordHash: _passwordHash, ...safeUser } = user;
@@ -43,13 +43,9 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const userAgent = req.headers['user-agent'] || 'unknown';
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      req.ip ||
-      'unknown';
+  async login(@Body() dto: LoginDto, @Req() req: AppFastifyRequest, @Res({ passthrough: true }) res: AppFastifyReply) {
+    const userAgent = getUserAgent(req);
+    const ip = getClientIp(req);
 
     const { accessToken, refreshToken, deviceId, isNewDevice, user } = await this.authService.login(dto, userAgent, ip);
     const { id: _id, passwordHash: _passwordHash, ...safeUser } = user;
@@ -61,7 +57,7 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(200)
   @UseGuards(RefreshGuard)
-  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async refresh(@Req() req: AppFastifyRequest, @Res({ passthrough: true }) res: AppFastifyReply) {
     const userId = req.user?.userId;
     const refreshToken = req.user?.refreshToken;
     const deviceId = req.user?.deviceId;
@@ -80,27 +76,27 @@ export class AuthController {
   @Post('logout')
   @HttpCode(200)
   @UseGuards(RefreshGuard)
-  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async logout(@Req() req: AppFastifyRequest, @Res({ passthrough: true }) res: AppFastifyReply) {
     const userId = req.user?.userId;
     const deviceId = req.user?.deviceId;
 
     if (!userId || !deviceId) throw new ForbiddenException('Access denied');
     await this.authService.logout(userId, deviceId);
-    res.clearCookie('refreshToken', { ...this.refreshCookieOptions });
+    res.clearCookie('refreshToken', { path: this.refreshCookieOptions.path });
     return { message: 'Logged out' };
   }
 
-  private setRefreshCookie(reply: Response, refreshToken: string) {
-    reply.cookie('refreshToken', refreshToken, {
+  private setRefreshCookie(reply: AppFastifyReply, refreshToken: string) {
+    reply.setCookie('refreshToken', refreshToken, {
       ...this.refreshCookieOptions,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 7 * 24 * 60 * 60,
     });
   }
 
-  private readonly refreshCookieOptions: CookieOptions = {
+  private readonly refreshCookieOptions = {
     httpOnly: true,
     secure: IS_PROD,
-    sameSite: IS_PROD ? 'none' : 'lax',
+    sameSite: IS_PROD ? ('none' as const) : ('lax' as const),
     path: '/',
   };
 }

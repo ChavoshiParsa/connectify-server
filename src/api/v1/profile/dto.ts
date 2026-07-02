@@ -8,7 +8,7 @@ export class CheckUsernameDto {
     message: 'Username must start with a letter and contain only letters, numbers, and underscores.',
   })
   @Length(3, 12)
-  username: string;
+  username!: string;
 }
 
 export class UpdateProfileDto {
@@ -45,7 +45,7 @@ export class UpdateProfileDto {
 
 export class UpdateAvatarDto {
   @IsString()
-  @MaxLength(2_000_000)
+  @MaxLength(2000000)
   @Matches(/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/)
-  avatarBase64: string;
+  avatarBase64!: string;
 }
