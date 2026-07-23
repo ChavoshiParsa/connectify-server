@@ -21,10 +21,9 @@ export class UpdateProfileDto {
 
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @Transform(({ value }: { value?: string }) => value?.trim())
+  @Transform(({ value }: { value?: string | null }) => value?.trim() || null)
   @Length(1, 24)
-  lastName?: string;
+  lastName?: string | null;
 
   @IsOptional()
   @IsString()
@@ -37,8 +36,7 @@ export class UpdateProfileDto {
 
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @Transform(({ value }: { value?: string }) => value?.trim())
+  @Transform(({ value }: { value?: string | null }) => value?.trim() || null)
   @Length(1, 128)
-  biography?: string;
+  biography?: string | null;
 }

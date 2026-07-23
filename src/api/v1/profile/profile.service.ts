@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AvatarStorageService } from 'src/avatar/avatar-storage.service';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -15,6 +15,11 @@ export class ProfileService {
   ) {}
 
   async updateProfile(dto: UpdateProfileDto, userId: string) {
+    if (dto.username) {
+      const existingUser = await this.usersService.findByUsername(dto.username);
+      if (existingUser && existingUser.id !== userId) throw new BadRequestException('Username already in use');
+    }
+
     const result = await this.prisma.user.update({
       where: { id: userId },
       data: {

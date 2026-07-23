@@ -15,10 +15,17 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { AppFastifyReply, AppFastifyRequest } from 'src/common/types/http';
-import { MAX_MESSAGE_IMAGE_BYTES } from 'src/message-media/message-media.constants';
+import {
+  MAX_FILE_MESSAGE_BYTES,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_VIDEO_MESSAGE_BYTES,
+  MAX_VOICE_MESSAGE_BYTES,
+  MAX_VOICE_MESSAGE_DURATION_MS,
+} from 'src/message-media/message-media.constants';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { DmService } from './dm.service';
 import { DmKeyDto, GetRoomMessagesDto, MessageDto, SeenMessagesDto } from './dto';
+import type { MultipartPart, MultipartRequest, MultipartUpload } from './types';
 
 @Controller('api/v1/dm')
 @UseGuards(JwtGuard)
@@ -82,8 +89,8 @@ export class DmController {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    const multipartRequest = req as unknown as MessageImageMultipartRequest;
-    let image: MessageImageUpload | undefined;
+    const multipartRequest = req as unknown as MultipartRequest;
+    let image: MultipartUpload | undefined;
     try {
       image = await multipartRequest.file({ limits: { files: 1, fileSize: MAX_MESSAGE_IMAGE_BYTES } });
     } catch {
@@ -109,6 +116,68 @@ export class DmController {
     });
   }
 
+  @Post('send-voice/:recipientPublicId')
+  async sendVoice(@Req() req: AppFastifyRequest, @Param('recipientPublicId') recipientPublicId: string) {
+    const userId = req.user?.userId;
+    if (!userId) throw new ForbiddenException('Access denied');
+
+    const multipartRequest = req as unknown as MultipartRequest;
+    let voice: MultipartUpload | undefined;
+    try {
+      voice = await multipartRequest.file({ limits: { files: 1, fileSize: MAX_VOICE_MESSAGE_BYTES } });
+    } catch {
+      throw new BadRequestException('Voice message is too large');
+    }
+
+    if (!voice || voice.fieldname !== 'voice') throw new BadRequestException('Voice message is required');
+
+    let buffer: Buffer;
+    try {
+      buffer = await voice.toBuffer();
+    } catch {
+      throw new BadRequestException('Voice message is too large');
+    }
+
+    const durationMs = Number(this.readStringField(voice.fields.durationMs));
+    if (!Number.isInteger(durationMs) || durationMs < 1 || durationMs > MAX_VOICE_MESSAGE_DURATION_MS) {
+      throw new BadRequestException('Invalid voice message duration');
+    }
+
+    return this.dmService.sendVoiceMessage(userId, recipientPublicId, {
+      buffer,
+      mimeType: voice.mimetype,
+      fileName: voice.filename,
+      durationMs,
+    });
+  }
+
+  @Post('send-video/:recipientPublicId')
+  async sendVideo(@Req() req: AppFastifyRequest, @Param('recipientPublicId') recipientPublicId: string) {
+    const userId = req.user?.userId;
+    if (!userId) throw new ForbiddenException('Access denied');
+    const upload = await this.readUpload(req, 'video', MAX_VIDEO_MESSAGE_BYTES);
+    const rawDuration = this.readStringField(upload.fields.durationMs);
+    const durationMs = rawDuration ? Number(rawDuration) : undefined;
+    return this.dmService.sendVideoMessage(userId, recipientPublicId, {
+      buffer: upload.buffer,
+      mimeType: upload.part.mimetype,
+      fileName: upload.part.filename,
+      durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+    });
+  }
+
+  @Post('send-file/:recipientPublicId')
+  async sendFile(@Req() req: AppFastifyRequest, @Param('recipientPublicId') recipientPublicId: string) {
+    const userId = req.user?.userId;
+    if (!userId) throw new ForbiddenException('Access denied');
+    const upload = await this.readUpload(req, 'file', MAX_FILE_MESSAGE_BYTES);
+    return this.dmService.sendFileMessage(userId, recipientPublicId, {
+      buffer: upload.buffer,
+      mimeType: upload.part.mimetype,
+      fileName: upload.part.filename,
+    });
+  }
+
   @Get('message-image/:messageId/:fileId')
   async getMessageImage(
     @Req() req: AppFastifyRequest,
@@ -123,8 +192,28 @@ export class DmController {
     reply
       .header('Content-Type', attachment.mimeType)
       .header('Content-Length', file.length)
+      .header('X-Content-Type-Options', 'nosniff')
       .header('Cache-Control', 'private, max-age=3600')
       .send(this.dmService.openMessageImage(fileId));
+  }
+
+  @Get('message-media/:messageId/:fileId')
+  async getMessageMedia(
+    @Req() req: AppFastifyRequest,
+    @Res() reply: AppFastifyReply,
+    @Param('messageId') messageId: string,
+    @Param('fileId') fileId: string,
+  ) {
+    const userId = req.user?.userId;
+    if (!userId) throw new ForbiddenException('Access denied');
+
+    const { file, attachment } = await this.dmService.getMessageMedia(userId, messageId, fileId);
+    reply
+      .header('Content-Type', attachment.mimeType)
+      .header('Content-Length', file.length)
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Cache-Control', 'private, max-age=3600')
+      .send(this.dmService.openMessageMedia(fileId));
   }
 
   @Post('set-typing/:recipientPublicId')
@@ -181,28 +270,24 @@ export class DmController {
     return this.dmService.deleteMessage(userId, messageId);
   }
 
-  private readStringField(field?: MessageImagePart | MessageImagePart[]) {
+  private readStringField(field?: MultipartPart | MultipartPart[]) {
     if (!field || Array.isArray(field) || field.type !== 'field') return undefined;
     return typeof field.value === 'string' ? field.value : undefined;
   }
+
+  private async readUpload(req: AppFastifyRequest, fieldName: string, maxBytes: number) {
+    const multipartRequest = req as unknown as MultipartRequest;
+    let part: MultipartUpload | undefined;
+    try {
+      part = await multipartRequest.file({ limits: { files: 1, fileSize: maxBytes } });
+    } catch {
+      throw new BadRequestException('Uploaded file is too large');
+    }
+    if (!part || part.fieldname !== fieldName) throw new BadRequestException(`${fieldName} is required`);
+    try {
+      return { part, fields: part.fields, buffer: await part.toBuffer() };
+    } catch {
+      throw new BadRequestException('Uploaded file is too large');
+    }
+  }
 }
-
-type MessageImageField = {
-  type: 'field';
-  value: unknown;
-};
-
-type MessageImageUpload = {
-  type: 'file';
-  fieldname: string;
-  filename: string;
-  mimetype: string;
-  fields: Record<string, MessageImagePart | MessageImagePart[] | undefined>;
-  toBuffer: () => Promise<Buffer>;
-};
-
-type MessageImagePart = MessageImageField | MessageImageUpload;
-
-type MessageImageMultipartRequest = {
-  file: (options?: { limits?: { fileSize?: number; files?: number } }) => Promise<MessageImageUpload | undefined>;
-};

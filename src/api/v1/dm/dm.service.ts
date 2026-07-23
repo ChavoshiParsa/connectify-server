@@ -3,9 +3,10 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma } from 'generated/prisma/client';
 import { RoomType, UserStatus } from 'generated/prisma/enums';
 import { MessageMediaStorageService } from 'src/message-media/message-media-storage.service';
-import type { ImageMessageAttachment } from 'src/message-media/message-media.types';
+import type { ImageMessageAttachment, MessageMediaAttachment } from 'src/message-media/message-media.types';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import type { UploadedFile, UploadedImage, UploadedVideo, UploadedVoice } from './types';
 
 @Injectable()
 export class DmService {
@@ -175,12 +176,7 @@ export class DmService {
     return message;
   }
 
-  async sendImageMessage(
-    userId: string,
-    recipientPublicId: string,
-    content: string,
-    image: { buffer: Buffer; mimeType: string; fileName: string },
-  ) {
+  async sendImageMessage(userId: string, recipientPublicId: string, content: string, image: UploadedImage) {
     const sender = await this.usersService.findById(userId);
     const recipient = await this.usersService.findByPublicId(recipientPublicId);
     if (!sender || !recipient) throw new NotFoundException('Invalid sender or recipient.');
@@ -190,11 +186,45 @@ export class DmService {
     return this.sendMessage(userId, recipientPublicId, content, [attachment]);
   }
 
+  async sendVoiceMessage(userId: string, recipientPublicId: string, voice: UploadedVoice) {
+    const sender = await this.usersService.findById(userId);
+    const recipient = await this.usersService.findByPublicId(recipientPublicId);
+    if (!sender || !recipient) throw new NotFoundException('Invalid sender or recipient.');
+    if (sender.publicId === recipient.publicId) throw new BadRequestException('Cannot send message to yourself.');
+
+    const attachment = await this.messageMediaStorage.uploadVoice(
+      voice.buffer,
+      voice.mimeType,
+      voice.fileName,
+      userId,
+      voice.durationMs,
+    );
+    return this.sendMessage(userId, recipientPublicId, '', [attachment]);
+  }
+
+  async sendVideoMessage(userId: string, recipientPublicId: string, video: UploadedVideo) {
+    await this.ensureCanMessage(userId, recipientPublicId);
+    const attachment = await this.messageMediaStorage.uploadVideo(
+      video.buffer,
+      video.mimeType,
+      video.fileName,
+      userId,
+      video.durationMs,
+    );
+    return this.sendMessage(userId, recipientPublicId, '', [attachment]);
+  }
+
+  async sendFileMessage(userId: string, recipientPublicId: string, file: UploadedFile) {
+    await this.ensureCanMessage(userId, recipientPublicId);
+    const attachment = await this.messageMediaStorage.uploadFile(file.buffer, file.mimeType, file.fileName, userId);
+    return this.sendMessage(userId, recipientPublicId, '', [attachment]);
+  }
+
   async sendMessage(
     userId: string,
     recipientPublicId: string,
     content: string,
-    attachments?: ImageMessageAttachment[],
+    attachments?: MessageMediaAttachment[],
   ) {
     const sender = await this.usersService.findById(userId);
     const recipient = await this.usersService.findByPublicId(recipientPublicId);
@@ -321,7 +351,30 @@ export class DmService {
     return { file, attachment };
   }
 
+  async getMessageMedia(userId: string, messageId: string, fileId: string) {
+    const message = await this.prisma.message.findFirst({
+      where: {
+        id: messageId,
+        deletedAt: { isSet: false },
+        room: { members: { some: { userId } } },
+      },
+      select: { attachments: true },
+    });
+
+    const attachment = this.getMediaAttachments(message?.attachments).find((item) => item.fileId === fileId);
+    if (!attachment) throw new NotFoundException('Message media not found.');
+
+    const file = await this.messageMediaStorage.find(fileId);
+    if (!file) throw new NotFoundException('Message media not found.');
+
+    return { file, attachment };
+  }
+
   openMessageImage(fileId: string) {
+    return this.messageMediaStorage.openDownloadStream(fileId);
+  }
+
+  openMessageMedia(fileId: string) {
     return this.messageMediaStorage.openDownloadStream(fileId);
   }
 
@@ -409,7 +462,7 @@ export class DmService {
     });
 
     await Promise.allSettled(
-      this.getImageAttachments(existingMessage.attachments).map((attachment) =>
+      this.getMediaAttachments(existingMessage.attachments).map((attachment) =>
         this.messageMediaStorage.delete(attachment.fileId),
       ),
     );
@@ -652,6 +705,13 @@ export class DmService {
     return [a, b].sort().join('~');
   }
 
+  private async ensureCanMessage(userId: string, recipientPublicId: string) {
+    const sender = await this.usersService.findById(userId);
+    const recipient = await this.usersService.findByPublicId(recipientPublicId);
+    if (!sender || !recipient) throw new NotFoundException('Invalid sender or recipient.');
+    if (sender.publicId === recipient.publicId) throw new BadRequestException('Cannot send message to yourself.');
+  }
+
   private getPartnerPublicKey(publicId: string, dmKey: string): string | null {
     const [a, b] = dmKey.split('~') as [string, string];
     return publicId === a ? b : publicId === b ? a : null;
@@ -737,16 +797,28 @@ export class DmService {
   }
 
   private getImageAttachments(value: Prisma.JsonValue | null | undefined): ImageMessageAttachment[] {
+    return this.getMediaAttachments(value).filter(
+      (attachment): attachment is ImageMessageAttachment => attachment.type === 'IMAGE',
+    );
+  }
+
+  private getMediaAttachments(value: Prisma.JsonValue | null | undefined): MessageMediaAttachment[] {
     if (!Array.isArray(value)) return [];
 
-    return value.filter((item): item is ImageMessageAttachment => {
+    return value.filter((item): item is MessageMediaAttachment => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
-      return (
-        item.type === 'IMAGE' &&
+      const commonFieldsAreValid =
         typeof item.fileId === 'string' &&
         typeof item.fileName === 'string' &&
         typeof item.mimeType === 'string' &&
-        typeof item.size === 'number'
+        typeof item.size === 'number';
+
+      return (
+        commonFieldsAreValid &&
+        (item.type === 'IMAGE' ||
+          item.type === 'FILE' ||
+          (item.type === 'VOICE' && typeof item.durationMs === 'number') ||
+          (item.type === 'VIDEO' && (item.durationMs === undefined || typeof item.durationMs === 'number')))
       );
     });
   }

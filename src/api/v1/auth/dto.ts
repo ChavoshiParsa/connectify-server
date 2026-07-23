@@ -33,7 +33,7 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
-  @Transform(({ value }: { value?: string }) => value?.trim())
+  @Transform(({ value }: { value?: string }) => value?.trim() || undefined)
   @Length(1, 24)
   lastName?: string;
 

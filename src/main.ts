@@ -5,10 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module';
-import { MAX_MESSAGE_IMAGE_BYTES } from './message-media/message-media.constants';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { NODE_ENV } from './env';
 import { NestPinoLogger } from './logger/nest-pino.service';
+import { MAX_MESSAGE_MEDIA_BYTES } from './message-media/message-media.constants';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -33,7 +33,7 @@ async function bootstrap() {
   await app.register(fastifyMultipart, {
     limits: {
       files: 1,
-      fileSize: MAX_MESSAGE_IMAGE_BYTES,
+      fileSize: MAX_MESSAGE_MEDIA_BYTES,
     },
   });
 
@@ -59,6 +59,8 @@ async function bootstrap() {
   app.enableCors({
     origin: allowedOrigins.length ? allowedOrigins : false,
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   app.useGlobalFilters(new AllExceptionsFilter());

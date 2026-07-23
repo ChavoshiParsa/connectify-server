@@ -15,16 +15,7 @@ import { UsersService } from '../users/users.service';
 import { CheckUsernameDto, UpdateProfileDto } from './dto';
 import { ProfileService } from './profile.service';
 import { MAX_AVATAR_BYTES } from 'src/avatar/avatar.constants';
-
-type AvatarUpload = {
-  fieldname: string;
-  mimetype: string;
-  toBuffer: () => Promise<Buffer>;
-};
-
-type MultipartRequest = {
-  file: (options?: { limits?: { fileSize?: number; files?: number } }) => Promise<AvatarUpload | undefined>;
-};
+import type { AvatarMultipartRequest, AvatarUpload } from './types';
 
 @Controller('api/v1/profile')
 @UseGuards(JwtGuard)
@@ -54,7 +45,7 @@ export class ProfileController {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    const multipartRequest = req as unknown as MultipartRequest;
+    const multipartRequest = req as unknown as AvatarMultipartRequest;
     let avatar: AvatarUpload | undefined;
     try {
       avatar = await multipartRequest.file({ limits: { files: 1, fileSize: MAX_AVATAR_BYTES } });
