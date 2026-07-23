@@ -127,11 +127,14 @@ model Session {
 }
 
 model Message {
-  id       String @id @default(auto()) @map("_id") @db.ObjectId
-  roomId   String @db.ObjectId
-  room     Room   @relation(fields: [roomId], references: [id])
-  senderId String @db.ObjectId
-  sender   User   @relation(fields: [senderId], references: [id])
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  roomId    String    @db.ObjectId
+  room      Room      @relation(fields: [roomId], references: [id])
+  senderId  String    @db.ObjectId
+  sender    User      @relation(fields: [senderId], references: [id])
+  replyToId String?   @db.ObjectId
+  replyTo   Message?  @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies   Message[] @relation("MessageReplies")
 
   content     String
   attachments Json?
@@ -145,6 +148,7 @@ model Message {
 
   @@index([roomId, createdAt])
   @@index([senderId, createdAt])
+  @@index([replyToId])
 }
 
 model MessageReceipt {

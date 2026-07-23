@@ -81,7 +81,7 @@ export class DmController {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
 
-    return this.dmService.sendMessage(userId, recipientPublicId, dto.content);
+    return this.dmService.sendMessage(userId, recipientPublicId, dto.content, { replyToId: dto.replyToId });
   }
 
   @Post('send-image/:recipientPublicId')
@@ -108,12 +108,19 @@ export class DmController {
 
     const content = this.readStringField(image.fields.content)?.trim() ?? '';
     if (content.length > 5000) throw new BadRequestException('Message caption is too long');
+    const replyToId = this.readReplyToId(image.fields.replyToId);
 
-    return this.dmService.sendImageMessage(userId, recipientPublicId, content, {
-      buffer,
-      mimeType: image.mimetype,
-      fileName: image.filename,
-    });
+    return this.dmService.sendImageMessage(
+      userId,
+      recipientPublicId,
+      content,
+      {
+        buffer,
+        mimeType: image.mimetype,
+        fileName: image.filename,
+      },
+      replyToId,
+    );
   }
 
   @Post('send-voice/:recipientPublicId')
@@ -142,13 +149,19 @@ export class DmController {
     if (!Number.isInteger(durationMs) || durationMs < 1 || durationMs > MAX_VOICE_MESSAGE_DURATION_MS) {
       throw new BadRequestException('Invalid voice message duration');
     }
+    const replyToId = this.readReplyToId(voice.fields.replyToId);
 
-    return this.dmService.sendVoiceMessage(userId, recipientPublicId, {
-      buffer,
-      mimeType: voice.mimetype,
-      fileName: voice.filename,
-      durationMs,
-    });
+    return this.dmService.sendVoiceMessage(
+      userId,
+      recipientPublicId,
+      {
+        buffer,
+        mimeType: voice.mimetype,
+        fileName: voice.filename,
+        durationMs,
+      },
+      replyToId,
+    );
   }
 
   @Post('send-video/:recipientPublicId')
@@ -158,12 +171,17 @@ export class DmController {
     const upload = await this.readUpload(req, 'video', MAX_VIDEO_MESSAGE_BYTES);
     const rawDuration = this.readStringField(upload.fields.durationMs);
     const durationMs = rawDuration ? Number(rawDuration) : undefined;
-    return this.dmService.sendVideoMessage(userId, recipientPublicId, {
-      buffer: upload.buffer,
-      mimeType: upload.part.mimetype,
-      fileName: upload.part.filename,
-      durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
-    });
+    return this.dmService.sendVideoMessage(
+      userId,
+      recipientPublicId,
+      {
+        buffer: upload.buffer,
+        mimeType: upload.part.mimetype,
+        fileName: upload.part.filename,
+        durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+      },
+      this.readReplyToId(upload.fields.replyToId),
+    );
   }
 
   @Post('send-file/:recipientPublicId')
@@ -171,11 +189,16 @@ export class DmController {
     const userId = req.user?.userId;
     if (!userId) throw new ForbiddenException('Access denied');
     const upload = await this.readUpload(req, 'file', MAX_FILE_MESSAGE_BYTES);
-    return this.dmService.sendFileMessage(userId, recipientPublicId, {
-      buffer: upload.buffer,
-      mimeType: upload.part.mimetype,
-      fileName: upload.part.filename,
-    });
+    return this.dmService.sendFileMessage(
+      userId,
+      recipientPublicId,
+      {
+        buffer: upload.buffer,
+        mimeType: upload.part.mimetype,
+        fileName: upload.part.filename,
+      },
+      this.readReplyToId(upload.fields.replyToId),
+    );
   }
 
   @Get('message-image/:messageId/:fileId')
@@ -273,6 +296,13 @@ export class DmController {
   private readStringField(field?: MultipartPart | MultipartPart[]) {
     if (!field || Array.isArray(field) || field.type !== 'field') return undefined;
     return typeof field.value === 'string' ? field.value : undefined;
+  }
+
+  private readReplyToId(field?: MultipartPart | MultipartPart[]) {
+    const value = this.readStringField(field)?.trim();
+    if (!value) return undefined;
+    if (!/^[a-f\d]{24}$/i.test(value)) throw new BadRequestException('Invalid reply message ID');
+    return value;
   }
 
   private async readUpload(req: AppFastifyRequest, fieldName: string, maxBytes: number) {

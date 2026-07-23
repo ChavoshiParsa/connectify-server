@@ -33,3 +33,9 @@ export type UploadedVideo = UploadedImage & {
 };
 
 export type UploadedFile = UploadedImage;
+
+export type SendMessageOptions = {
+  attachments?: MessageMediaAttachment[];
+  replyToId?: string;
+};
+import type { MessageMediaAttachment } from 'src/message-media/message-media.types';

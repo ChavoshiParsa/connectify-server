@@ -20,6 +20,11 @@ export class MessageDto {
   @MinLength(1)
   @MaxLength(5000)
   content!: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[a-f\d]{24}$/i, { message: 'replyToId must be a valid message ID' })
+  replyToId?: string;
 }
 
 export class GetRoomMessagesDto {

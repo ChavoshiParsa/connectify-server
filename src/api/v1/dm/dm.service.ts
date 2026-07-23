@@ -6,7 +6,7 @@ import { MessageMediaStorageService } from 'src/message-media/message-media-stor
 import type { ImageMessageAttachment, MessageMediaAttachment } from 'src/message-media/message-media.types';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
-import type { UploadedFile, UploadedImage, UploadedVideo, UploadedVoice } from './types';
+import type { SendMessageOptions, UploadedFile, UploadedImage, UploadedVideo, UploadedVoice } from './types';
 
 @Injectable()
 export class DmService {
@@ -176,17 +176,23 @@ export class DmService {
     return message;
   }
 
-  async sendImageMessage(userId: string, recipientPublicId: string, content: string, image: UploadedImage) {
+  async sendImageMessage(
+    userId: string,
+    recipientPublicId: string,
+    content: string,
+    image: UploadedImage,
+    replyToId?: string,
+  ) {
     const sender = await this.usersService.findById(userId);
     const recipient = await this.usersService.findByPublicId(recipientPublicId);
     if (!sender || !recipient) throw new NotFoundException('Invalid sender or recipient.');
     if (sender.publicId === recipient.publicId) throw new BadRequestException('Cannot send message to yourself.');
 
     const attachment = await this.messageMediaStorage.uploadImage(image.buffer, image.mimeType, image.fileName, userId);
-    return this.sendMessage(userId, recipientPublicId, content, [attachment]);
+    return this.sendMessage(userId, recipientPublicId, content, { attachments: [attachment], replyToId });
   }
 
-  async sendVoiceMessage(userId: string, recipientPublicId: string, voice: UploadedVoice) {
+  async sendVoiceMessage(userId: string, recipientPublicId: string, voice: UploadedVoice, replyToId?: string) {
     const sender = await this.usersService.findById(userId);
     const recipient = await this.usersService.findByPublicId(recipientPublicId);
     if (!sender || !recipient) throw new NotFoundException('Invalid sender or recipient.');
@@ -199,10 +205,10 @@ export class DmService {
       userId,
       voice.durationMs,
     );
-    return this.sendMessage(userId, recipientPublicId, '', [attachment]);
+    return this.sendMessage(userId, recipientPublicId, '', { attachments: [attachment], replyToId });
   }
 
-  async sendVideoMessage(userId: string, recipientPublicId: string, video: UploadedVideo) {
+  async sendVideoMessage(userId: string, recipientPublicId: string, video: UploadedVideo, replyToId?: string) {
     await this.ensureCanMessage(userId, recipientPublicId);
     const attachment = await this.messageMediaStorage.uploadVideo(
       video.buffer,
@@ -211,21 +217,17 @@ export class DmService {
       userId,
       video.durationMs,
     );
-    return this.sendMessage(userId, recipientPublicId, '', [attachment]);
+    return this.sendMessage(userId, recipientPublicId, '', { attachments: [attachment], replyToId });
   }
 
-  async sendFileMessage(userId: string, recipientPublicId: string, file: UploadedFile) {
+  async sendFileMessage(userId: string, recipientPublicId: string, file: UploadedFile, replyToId?: string) {
     await this.ensureCanMessage(userId, recipientPublicId);
     const attachment = await this.messageMediaStorage.uploadFile(file.buffer, file.mimeType, file.fileName, userId);
-    return this.sendMessage(userId, recipientPublicId, '', [attachment]);
+    return this.sendMessage(userId, recipientPublicId, '', { attachments: [attachment], replyToId });
   }
 
-  async sendMessage(
-    userId: string,
-    recipientPublicId: string,
-    content: string,
-    attachments?: MessageMediaAttachment[],
-  ) {
+  async sendMessage(userId: string, recipientPublicId: string, content: string, options: SendMessageOptions = {}) {
+    const { attachments = [], replyToId } = options;
     const sender = await this.usersService.findById(userId);
     const recipient = await this.usersService.findByPublicId(recipientPublicId);
 
@@ -246,15 +248,28 @@ export class DmService {
         });
 
         if (existingRoom) {
+          if (replyToId) {
+            const replyTarget = await tx.message.findFirst({
+              where: {
+                id: replyToId,
+                roomId: existingRoom.id,
+                deletedAt: { isSet: false },
+              },
+              select: { id: true },
+            });
+            if (!replyTarget) throw new BadRequestException('Reply target is not available in this conversation.');
+          }
+
           const message = await tx.message.create({
             data: {
               roomId: existingRoom.id,
               senderId: sender.id,
               content,
+              replyToId,
               attachments: attachments?.length ? (attachments as Prisma.InputJsonValue) : undefined,
               receipts: { create: { userId: recipient.id } },
             },
-            select: { id: true, content: true, attachments: true, createdAt: true },
+            select: { id: true, content: true, attachments: true, replyToId: true, createdAt: true },
           });
 
           await tx.roomMember.update({
@@ -276,6 +291,8 @@ export class DmService {
 
           return message;
         } else {
+          if (replyToId) throw new BadRequestException('Reply target is not available in this conversation.');
+
           const newRoom = await tx.room.create({
             data: {
               type: RoomType.DM,
@@ -295,7 +312,7 @@ export class DmService {
               attachments: attachments?.length ? (attachments as Prisma.InputJsonValue) : undefined,
               receipts: { create: { userId: recipient.id } },
             },
-            select: { id: true, content: true, attachments: true, createdAt: true },
+            select: { id: true, content: true, attachments: true, replyToId: true, createdAt: true },
           });
 
           await tx.room.update({
@@ -327,6 +344,7 @@ export class DmService {
       messageId: message.id,
       content: message.content,
       attachments: message.attachments,
+      replyToId: message.replyToId,
       createdAt: message.createdAt,
       dmKey,
     };
@@ -809,6 +827,21 @@ export class DmService {
       id: true,
       content: true,
       attachments: true,
+      replyTo: {
+        select: {
+          id: true,
+          content: true,
+          attachments: true,
+          deletedAt: true,
+          sender: {
+            select: {
+              firstName: true,
+              lastName: true,
+              publicId: true,
+            },
+          },
+        },
+      },
       createdAt: true,
       editedAt: true,
       sender: this.safeUserSelect,
