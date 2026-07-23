@@ -379,6 +379,11 @@ export class DmService {
   }
 
   async editMessage(userId: string, messageId: string, content: string) {
+    const normalizedContent = content.trim();
+    if (!normalizedContent) {
+      throw new BadRequestException('Message content cannot be empty.');
+    }
+
     const existingMessage = await this.prisma.message.findFirst({
       where: {
         id: messageId,
@@ -393,7 +398,7 @@ export class DmService {
 
     const message = await this.prisma.message.update({
       where: { id: messageId },
-      data: { content, editedAt: new Date() },
+      data: { content: normalizedContent, editedAt: new Date() },
       select: {
         id: true,
         content: true,
@@ -430,57 +435,107 @@ export class DmService {
   }
 
   async deleteMessage(userId: string, messageId: string) {
-    const existingMessage = await this.prisma.message.findFirst({
-      where: {
-        id: messageId,
-        senderId: userId,
-        deletedAt: { isSet: false },
-      },
-    });
-
-    if (!existingMessage) {
-      throw new NotFoundException('Message not found or you do not have permission to delete it.');
-    }
-
-    const message = await this.prisma.message.update({
-      where: { id: messageId },
-      data: { deletedAt: new Date() },
-      select: {
-        id: true,
-        deletedAt: true,
-        room: {
-          select: {
-            dmKey: true,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existingMessage = await tx.message.findFirst({
+        where: {
+          id: messageId,
+          senderId: userId,
+          deletedAt: { isSet: false },
+        },
+        select: {
+          id: true,
+          roomId: true,
+          attachments: true,
+          receipts: {
+            select: {
+              userId: true,
+              readAt: true,
+            },
+          },
+          room: {
+            select: {
+              dmKey: true,
+              lastMessageId: true,
+            },
+          },
+          sender: {
+            select: {
+              publicId: true,
+            },
           },
         },
-        sender: {
-          select: {
-            publicId: true,
+      });
+
+      if (!existingMessage) {
+        throw new NotFoundException('Message not found or you do not have permission to delete it.');
+      }
+
+      const deletedAt = new Date();
+      await tx.message.update({
+        where: { id: messageId },
+        data: { deletedAt },
+      });
+
+      if (existingMessage.room.lastMessageId === messageId) {
+        const previousMessage = await tx.message.findFirst({
+          where: {
+            roomId: existingMessage.roomId,
+            id: { not: messageId },
+            deletedAt: { isSet: false },
           },
-        },
-      },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        });
+
+        await tx.room.update({
+          where: { id: existingMessage.roomId },
+          data: { lastMessageId: previousMessage?.id ?? null },
+        });
+      }
+
+      const unreadReceipt = existingMessage.receipts.find((receipt) => !receipt.readAt);
+      if (unreadReceipt) {
+        await tx.roomMember.updateMany({
+          where: {
+            roomId: existingMessage.roomId,
+            userId: unreadReceipt.userId,
+            unreadCount: { gt: 0 },
+          },
+          data: {
+            unreadCount: { decrement: 1 },
+          },
+        });
+      }
+
+      return {
+        id: existingMessage.id,
+        attachments: existingMessage.attachments,
+        dmKey: existingMessage.room.dmKey as string,
+        senderPublicId: existingMessage.sender.publicId,
+        deletedAt,
+      };
     });
 
     await Promise.allSettled(
-      this.getMediaAttachments(existingMessage.attachments).map((attachment) =>
+      this.getMediaAttachments(result.attachments).map((attachment) =>
         this.messageMediaStorage.delete(attachment.fileId),
       ),
     );
 
-    const recipientPublicId = this.getPartnerPublicKey(message.sender.publicId, message.room.dmKey as string);
+    const recipientPublicId = this.getPartnerPublicKey(result.senderPublicId, result.dmKey);
 
     this.eventEmitter.emit('message.deleted', {
-      messageId: message.id,
-      dmKey: message.room.dmKey,
-      deletedByPublicId: message.sender.publicId,
+      messageId: result.id,
+      dmKey: result.dmKey,
+      deletedByPublicId: result.senderPublicId,
       recipientPublicId,
-      deletedAt: message.deletedAt,
+      deletedAt: result.deletedAt,
     });
 
     return {
       success: true,
-      messageId: message.id,
-      deletedAt: message.deletedAt,
+      messageId: result.id,
+      deletedAt: result.deletedAt,
     };
   }
 
