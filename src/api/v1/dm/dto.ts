@@ -40,6 +40,13 @@ export class GetRoomMessagesDto {
   limit?: number;
 }
 
+export class SearchRoomMessagesDto extends GetRoomMessagesDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  q!: string;
+}
+
 export class DmKeyDto {
   @IsString()
   @IsNotEmpty()

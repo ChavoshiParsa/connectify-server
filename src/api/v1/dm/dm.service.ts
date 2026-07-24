@@ -152,6 +152,70 @@ export class DmService {
     };
   }
 
+  async searchRoomMessages(userId: string, dmKey: string, query: string, cursor?: Date | string, limit: number = 50) {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) throw new BadRequestException('Search query is required.');
+
+    const validLimit = Math.min(Math.max(limit, 1), 100);
+    const room = await this.prisma.room.findFirst({
+      where: {
+        type: RoomType.DM,
+        dmKey,
+        members: { some: { userId } },
+      },
+      select: { id: true },
+    });
+
+    if (!room) {
+      return {
+        results: [],
+        nextCursor: null,
+        hasMore: false,
+        total: 0,
+      };
+    }
+
+    const cursorDate = cursor ? (cursor instanceof Date ? cursor : new Date(cursor)) : new Date();
+    if (cursor && isNaN(cursorDate.getTime())) {
+      throw new BadRequestException('Invalid cursor format. Expected ISO 8601 date string.');
+    }
+
+    const searchWhere: Prisma.MessageWhereInput = {
+      roomId: room.id,
+      deletedAt: { isSet: false },
+      content: {
+        contains: normalizedQuery,
+        mode: 'insensitive',
+      },
+    };
+
+    const [total, matches] = await Promise.all([
+      this.prisma.message.count({ where: searchWhere }),
+      this.prisma.message.findMany({
+        where: {
+          ...searchWhere,
+          createdAt: { lt: cursorDate },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: validLimit + 1,
+        select: {
+          id: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    const hasMore = matches.length > validLimit;
+    const results = hasMore ? matches.slice(0, validLimit) : matches;
+
+    return {
+      results,
+      nextCursor: hasMore ? results[results.length - 1].createdAt.toISOString() : null,
+      hasMore,
+      total,
+    };
+  }
+
   async getMessageDetails(userId: string, messageId: string) {
     const message = await this.prisma.message.findFirst({
       where: {

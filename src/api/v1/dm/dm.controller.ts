@@ -24,7 +24,7 @@ import {
 } from 'src/message-media/message-media.constants';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { DmService } from './dm.service';
-import { DmKeyDto, GetRoomMessagesDto, MessageDto, SeenMessagesDto } from './dto';
+import { DmKeyDto, GetRoomMessagesDto, MessageDto, SearchRoomMessagesDto, SeenMessagesDto } from './dto';
 import type { MultipartPart, MultipartRequest, MultipartUpload } from './types';
 
 @Controller('api/v1/dm')
@@ -62,6 +62,20 @@ export class DmController {
     const sortedDmKey = DmKeyDto.sortAndValidate(dmKey);
 
     return this.dmService.getRoomMessages(userId, sortedDmKey, query.cursor, query.limit ?? 50);
+  }
+
+  @Get('search-messages/:dmKey')
+  async searchRoomMessages(
+    @Req() req: AppFastifyRequest,
+    @Param('dmKey') dmKey: string,
+    @Query() query: SearchRoomMessagesDto,
+  ) {
+    const userId = req.user?.userId;
+    if (!userId) throw new ForbiddenException('Access denied');
+
+    const sortedDmKey = DmKeyDto.sortAndValidate(dmKey);
+
+    return this.dmService.searchRoomMessages(userId, sortedDmKey, query.q, query.cursor, query.limit ?? 50);
   }
 
   @Get('message-details/:messageId')
