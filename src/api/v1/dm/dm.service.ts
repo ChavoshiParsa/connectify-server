@@ -69,7 +69,7 @@ export class DmService {
           some: { userId },
         },
       },
-      select: this.dmRoomSelectForUser(userId),
+      select: this.dmRoomDetailsSelectForUser(userId),
     });
 
     if (!room) {
@@ -77,7 +77,10 @@ export class DmService {
       const sender = await this.usersService.findById(userId);
       const publicId = this.getPartnerPublicKey(sender!.publicId, dmKey) as string;
 
-      const recipient = await this.prisma.user.findUnique({ where: { publicId }, omit: this.safeUserSelect.omit });
+      const recipient = await this.prisma.user.findUnique({
+        where: { publicId },
+        omit: this.chatProfileUserSelect.omit,
+      });
 
       return {
         dmKey,
@@ -866,6 +869,17 @@ export class DmService {
     },
   } as const;
 
+  private readonly chatProfileUserSelect = {
+    omit: {
+      id: true,
+      passwordHash: true,
+      lastLoginAt: true,
+      roles: true,
+      updatedAt: true,
+      createdAt: true,
+    },
+  } as const;
+
   private readonly lastMessageSelect = {
     id: true,
     content: true,
@@ -943,6 +957,20 @@ export class DmService {
         },
         select: {
           user: this.safeUserSelect,
+        },
+      },
+    } as const;
+  }
+
+  private dmRoomDetailsSelectForUser(userId: string) {
+    return {
+      ...this.dmRoomSelectForUser(userId),
+      members: {
+        where: {
+          userId: { not: userId },
+        },
+        select: {
+          user: this.chatProfileUserSelect,
         },
       },
     } as const;
